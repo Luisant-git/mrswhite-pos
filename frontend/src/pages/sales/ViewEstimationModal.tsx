@@ -6,6 +6,8 @@ import { useSettings } from '../../contexts/SettingsContext';
 import { useState } from 'react';
 import InvoicePrintModal from '../../components/InvoicePrintModal';
 import jsPDF from 'jspdf';
+import toast from 'react-hot-toast';
+import { sanitizeFileNamePart, shareOrDownloadFile } from '../../utils/shareFile';
 
 interface Props {
   estimationId: number;
@@ -92,21 +94,18 @@ export default function ViewEstimationModal({ estimationId, onClose }: Props) {
     doc.text('Thank you for your business!', W / 2, y, { align: 'center' });
 
     const pdfBlob = doc.output('blob');
-    const file = new File([pdfBlob], `Estimation_${estNo}.pdf`, { type: 'application/pdf' });
+    const safeEstNo = sanitizeFileNamePart(estNo, 'estimation');
     try {
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: `Estimation ${estNo}` });
-      } else {
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(pdfBlob);
-        link.download = `Estimation_${estNo}.pdf`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }
+      await shareOrDownloadFile({
+        blob: pdfBlob,
+        fileName: `Estimation_${safeEstNo}.pdf`,
+        title: `Estimation ${estNo}`,
+        text: `Estimation #${estNo} - ${currency} ${Number(grandTotal).toFixed(2)}`,
+      });
     } catch (err: any) {
-      if (err.name !== 'AbortError') {
+      if (err?.name !== 'AbortError') {
         console.error('Error sharing:', err);
+        toast.error('Failed to share estimation');
       }
     } finally {
       setIsSharing(false);

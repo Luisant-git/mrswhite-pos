@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Printer, Loader2, QrCode, Download, X } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import { dataUrlToBlob, sanitizeFileNamePart, shareOrDownloadFile } from '../utils/shareFile';
 
 const numberToWords = (num: number, isIndian: boolean = true): string => {
   const value = Math.abs(Number(num) || 0);
@@ -117,6 +119,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   const [isSharing, setIsSharing] = useState(false);
   const [isSharingQR, setIsSharingQR] = useState(false);
   const [isDownloadingQR, setIsDownloadingQR] = useState(false);
+  const preloadedLogoRef = useRef<{ src: string; dataUrl: string; width: number; height: number } | null>(null);
   const [printFormat, setPrintFormat] = useState<'a4' | 'a5' | 'thermal'>(
     () => {
       const saved = (localStorage.getItem('invoicePrintFormat') || 'a4').toLowerCase();
@@ -164,6 +167,43 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       return () => clearTimeout(timer);
     }
   }, [autoPrint, isLoading, sale, onClose]);
+
+  useEffect(() => {
+    if (!isOpen || !settings?.logoImage) {
+      if (!settings?.logoImage) preloadedLogoRef.current = null;
+      return;
+    }
+    const logoSrc = settings.logoImage;
+    if (preloadedLogoRef.current?.src === logoSrc) return;
+
+    let cancelled = false;
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = img.width || 100;
+        cv.height = img.height || 40;
+        cv.getContext('2d')?.drawImage(img, 0, 0);
+        preloadedLogoRef.current = {
+          src: logoSrc,
+          dataUrl: cv.toDataURL('image/png'),
+          width: cv.width,
+          height: cv.height,
+        };
+      } catch {
+        preloadedLogoRef.current = null;
+      }
+    };
+    img.onerror = () => {
+      if (!cancelled) preloadedLogoRef.current = null;
+    };
+    img.src = logoSrc;
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, settings?.logoImage]);
 
   useEffect(() => {
     if (isOpen && invoiceNo) {
@@ -260,7 +300,6 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   const handleWhatsApp = async () => {
     setIsSharing(true);
     try {
-      const { jsPDF } = await import('jspdf');
       const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
       const W = 210;
       const margin = 14;
@@ -278,21 +317,38 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
         doc.text(t || '', x, yPos, textOpts);
       };
 
-      // Logo
+      // Logo (use preloaded data URL synchronously to preserve Windows Share user gesture)
       if (settings?.logoImage) {
-        try {
-          const logoImg = await new Promise<HTMLImageElement>((resolve, reject) => {
-            const img = new Image(); img.crossOrigin = 'Anonymous';
-            img.onload = () => resolve(img); img.onerror = reject; img.src = settings.logoImage!;
-          });
-          const maxW = 50, maxH = 20;
-          const ratio = Math.min(maxW / (logoImg.width || 100), maxH / (logoImg.height || 40));
-          const lw = (logoImg.width || 100) * ratio, lh = (logoImg.height || 40) * ratio;
-          const cv = document.createElement('canvas'); cv.width = logoImg.width; cv.height = logoImg.height;
-          cv.getContext('2d')!.drawImage(logoImg, 0, 0);
-          doc.addImage(cv.toDataURL('image/png'), 'PNG', col, y, lw, lh);
-          y += lh + 4;
-        } catch { /* skip */ }
+        const maxW = 50, maxH = 20;
+        const cached = preloadedLogoRef.current?.src === settings.logoImage ? preloadedLogoRef.current : null;
+        if (cached) {
+          try {
+            const ratio = Math.min(maxW / (cached.width || 100), maxH / (cached.height || 40));
+            const lw = (cached.width || 100) * ratio;
+            const lh = (cached.height || 40) * ratio;
+            doc.addImage(cached.dataUrl, 'PNG', col, y, lw, lh);
+            y += lh + 4;
+          } catch { /* skip */ }
+        } else {
+          try {
+            const logoImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+              const img = new Image();
+              img.crossOrigin = 'Anonymous';
+              const timer = window.setTimeout(() => reject(new Error('Logo load timeout')), 1500);
+              img.onload = () => { window.clearTimeout(timer); resolve(img); };
+              img.onerror = (e) => { window.clearTimeout(timer); reject(e); };
+              img.src = settings.logoImage!;
+            });
+            const ratio = Math.min(maxW / (logoImg.width || 100), maxH / (logoImg.height || 40));
+            const lw = (logoImg.width || 100) * ratio, lh = (logoImg.height || 40) * ratio;
+            const cv = document.createElement('canvas'); cv.width = logoImg.width; cv.height = logoImg.height;
+            cv.getContext('2d')!.drawImage(logoImg, 0, 0);
+            const dataUrl = cv.toDataURL('image/png');
+            preloadedLogoRef.current = { src: settings.logoImage, dataUrl, width: cv.width, height: cv.height };
+            doc.addImage(dataUrl, 'PNG', col, y, lw, lh);
+            y += lh + 4;
+          } catch { /* skip */ }
+        }
       }
 
       addText((settings?.shopName || 'POS Suite 360').toUpperCase(), col, y, { size: 14, bold: true, color: '#04325E' }); y += 7;
@@ -355,23 +411,27 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
 
       // Table header
       const pdfCurr = currency.replace('\u20b9', 'Rs.');
-      doc.setFillColor('#2D6AA1'); doc.rect(col, y - 4, W - margin * 2, 8, 'F');
-      doc.setFontSize(7.5); doc.setFont('helvetica', 'bold'); doc.setTextColor('#ffffff');
-      doc.text('S.No', col + 2, y + 1);
-      doc.text('DESCRIPTION OF GOODS', col + 12, y + 1);
-      doc.text('HSN', col + 80, y + 1, { align: 'center' });
-      if (showTaxColumns) doc.text('GST %', col + 98, y + 1, { align: 'center' });
-      doc.text('QTY', col + 118, y + 1, { align: 'center' });
-      doc.text('RATE', col + 140, y + 1, { align: 'right' });
-      if (showMrpColumn) doc.text('MRP', col + 158, y + 1, { align: 'right' });
-      doc.text(`AMT (${pdfCurr})`, W - margin - 2, y + 1, { align: 'right' });
-      y += 7;
+      const drawItemsTableHeader = () => {
+        doc.setFillColor('#2D6AA1'); doc.rect(col, y - 4, W - margin * 2, 8, 'F');
+        doc.setFontSize(7.5); doc.setFont('helvetica', 'bold'); doc.setTextColor('#ffffff');
+        doc.text('S.No', col + 2, y + 1);
+        doc.text('DESCRIPTION OF GOODS', col + 12, y + 1);
+        doc.text('HSN', col + 80, y + 1, { align: 'center' });
+        if (showTaxColumns) doc.text('GST %', col + 98, y + 1, { align: 'center' });
+        doc.text('QTY', col + 118, y + 1, { align: 'center' });
+        doc.text('RATE', col + 140, y + 1, { align: 'right' });
+        if (showMrpColumn) doc.text('MRP', col + 158, y + 1, { align: 'right' });
+        doc.text(`AMT (${pdfCurr})`, W - margin - 2, y + 1, { align: 'right' });
+        y += 7;
+      };
+      drawItemsTableHeader();
 
       // Table rows
       items.forEach((item: any, idx: number) => {
-        if (y > 255) {
+        if (y > 265) {
           doc.addPage();
-          y = margin + 6;
+          y = margin + 4;
+          drawItemsTableHeader();
         }
         const displayName = item.isService
           ? (item.itemName || item.serviceItem?.name || '')
@@ -548,46 +608,39 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       const qrCanvas = document.getElementById('upi-qr-code-canvas') as HTMLCanvasElement | null;
       const bottomBlockY = Math.max(y + 2, 240);
       if (activeUpiId && grandTotal > 0 && qrCanvas) {
-        await new Promise<void>((resolve) => {
+        try {
           const styledCanvas = document.createElement('canvas');
           const ctx2 = styledCanvas.getContext('2d');
-          if (!ctx2) { resolve(); return; }
-          const sc = 3;
-          const sw = 200 * sc; const sh = 200 * sc;
-          styledCanvas.width = sw; styledCanvas.height = sh;
-          ctx2.imageSmoothingEnabled = true; ctx2.imageSmoothingQuality = 'high';
-          ctx2.fillStyle = '#F8FAFC'; ctx2.fillRect(0, 0, sw, sh);
-          ctx2.fillStyle = '#04325E'; ctx2.fillRect(0, 0, sw, 44 * sc);
-          ctx2.textAlign = 'center';
-          ctx2.fillStyle = '#ffffff'; ctx2.font = `bold ${8 * sc}px sans-serif`;
-          ctx2.fillText((settings?.shopName || 'POS Suite 360').toUpperCase(), sw / 2, 18 * sc);
-          ctx2.fillStyle = '#94A3B8'; ctx2.font = `bold ${6 * sc}px sans-serif`;
-          ctx2.fillText('SCAN TO PAY', sw / 2, 32 * sc);
-          ctx2.fillStyle = '#ffffff';
-          ctx2.fillRect(8 * sc, 48 * sc, sw - 16 * sc, 140 * sc);
-          const qrSz = 80 * sc;
-          ctx2.drawImage(qrCanvas, (sw - qrSz) / 2, 52 * sc, qrSz, qrSz);
-          ctx2.fillStyle = '#64748B'; ctx2.font = `bold ${5 * sc}px sans-serif`;
-          ctx2.fillText(`INVOICE: #${invoiceNo}`, sw / 2, 142 * sc);
-          ctx2.fillStyle = '#0F172A'; ctx2.font = `bold ${8 * sc}px sans-serif`;
-          ctx2.fillText(`${pdfCurr} ${Number(grandTotal).toFixed(2)}`, sw / 2, 158 * sc);
-          ctx2.fillStyle = '#64748B'; ctx2.font = `${4.5 * sc}px sans-serif`;
-          ctx2.fillText(activeUpiId.trim(), sw / 2, 172 * sc);
-          styledCanvas.toBlob((blob) => {
-            if (!blob) { resolve(); return; }
-            const reader = new FileReader();
-            reader.onload = () => {
-              const dataUrl = reader.result as string;
-              const qrY = Math.min(bottomBlockY, 244);
-              const qrW = 34; const qrH = 34;
-              doc.addImage(dataUrl, 'PNG', col, qrY, qrW, qrH);
-              const dlUrl = window.location.origin + '/upi-redirect?pa=' + encodeURIComponent(activeUpiId.trim()) + '&pn=' + encodeURIComponent((settings && settings.shopName) || 'Shop') + '&tr=' + encodeURIComponent(invoiceNo) + '&am=' + Number(grandTotal).toFixed(2) + '&cu=INR';
-              doc.link(col, qrY, qrW, qrH, { url: dlUrl });
-              resolve();
-            };
-            reader.readAsDataURL(blob);
-          }, 'image/png');
-        });
+          if (ctx2) {
+            const sc = 3;
+            const sw = 200 * sc; const sh = 200 * sc;
+            styledCanvas.width = sw; styledCanvas.height = sh;
+            ctx2.imageSmoothingEnabled = true; ctx2.imageSmoothingQuality = 'high';
+            ctx2.fillStyle = '#F8FAFC'; ctx2.fillRect(0, 0, sw, sh);
+            ctx2.fillStyle = '#04325E'; ctx2.fillRect(0, 0, sw, 44 * sc);
+            ctx2.textAlign = 'center';
+            ctx2.fillStyle = '#ffffff'; ctx2.font = `bold ${8 * sc}px sans-serif`;
+            ctx2.fillText((settings?.shopName || 'POS Suite 360').toUpperCase(), sw / 2, 18 * sc);
+            ctx2.fillStyle = '#94A3B8'; ctx2.font = `bold ${6 * sc}px sans-serif`;
+            ctx2.fillText('SCAN TO PAY', sw / 2, 32 * sc);
+            ctx2.fillStyle = '#ffffff';
+            ctx2.fillRect(8 * sc, 48 * sc, sw - 16 * sc, 140 * sc);
+            const qrSz = 80 * sc;
+            ctx2.drawImage(qrCanvas, (sw - qrSz) / 2, 52 * sc, qrSz, qrSz);
+            ctx2.fillStyle = '#64748B'; ctx2.font = `bold ${5 * sc}px sans-serif`;
+            ctx2.fillText(`INVOICE: #${invoiceNo}`, sw / 2, 142 * sc);
+            ctx2.fillStyle = '#0F172A'; ctx2.font = `bold ${8 * sc}px sans-serif`;
+            ctx2.fillText(`${pdfCurr} ${Number(grandTotal).toFixed(2)}`, sw / 2, 158 * sc);
+            ctx2.fillStyle = '#64748B'; ctx2.font = `${4.5 * sc}px sans-serif`;
+            ctx2.fillText(activeUpiId.trim(), sw / 2, 172 * sc);
+            const dataUrl = styledCanvas.toDataURL('image/png');
+            const qrY = Math.min(bottomBlockY, 244);
+            const qrW = 34; const qrH = 34;
+            doc.addImage(dataUrl, 'PNG', col, qrY, qrW, qrH);
+            const dlUrl = window.location.origin + '/upi-redirect?pa=' + encodeURIComponent(activeUpiId.trim()) + '&pn=' + encodeURIComponent((settings && settings.shopName) || 'Shop') + '&tr=' + encodeURIComponent(invoiceNo) + '&am=' + Number(grandTotal).toFixed(2) + '&cu=INR';
+            doc.link(col, qrY, qrW, qrH, { url: dlUrl });
+          }
+        } catch { /* skip QR if canvas fails */ }
       }
 
       if (!isEstimation) {
@@ -609,17 +662,19 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       doc.text(`This is a computer generated invoice | Thank you for partnering with ${settings?.shopName || 'POS Suite 360'}!`, W / 2, 288, { align: 'center' });
 
       const pdfBlob = doc.output('blob');
-      const file = new File([pdfBlob], `Invoice_${invoiceNo}.pdf`, { type: 'application/pdf' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: `${isEstimation ? 'Estimation' : 'Invoice'} ${invoiceNo}` });
-      } else {
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(pdfBlob);
-        link.download = `Invoice_${invoiceNo}.pdf`;
-        document.body.appendChild(link); link.click(); document.body.removeChild(link);
-      }
+      const safeDocNo = sanitizeFileNamePart(invoiceNo, 'document');
+      const docPrefix = isEstimation ? 'Estimation' : 'Invoice';
+      await shareOrDownloadFile({
+        blob: pdfBlob,
+        fileName: `${docPrefix}_${safeDocNo}.pdf`,
+        title: `${docPrefix} ${invoiceNo}`,
+        text: `${docPrefix} #${invoiceNo} - ${currency} ${Number(grandTotal).toFixed(2)}`,
+      });
     } catch (err: any) {
-      if (err.name !== 'AbortError') console.error('Error generating/sharing PDF:', err);
+      if (err?.name !== 'AbortError') {
+        console.error('Error generating/sharing PDF:', err);
+        toast.error('Failed to share invoice PDF');
+      }
     } finally {
       setIsSharing(false);
     }
@@ -882,32 +937,13 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       ctx.font = `bold ${11 * scale}px sans-serif`;
       ctx.fillText('SECURE PAYMENTS BY POS SUITE 360', width / 2, height - 25 * scale);
 
-      await new Promise<void>((resolve) => {
-        canvas.toBlob(async (blob) => {
-          if (!blob) {
-            resolve();
-            return;
-          }
-          const file = new File([blob], `Pay_${invoiceNo}.png`, { type: 'image/png' });
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            try {
-              await navigator.share({ files: [file], title: `Pay Invoice ${invoiceNo}` });
-            } catch (err: any) {
-              if (err.name !== 'AbortError') {
-                console.error('Error sharing QR code:', err);
-              }
-            }
-          } else {
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `Pay_${invoiceNo}.png`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-          }
-          resolve();
-        }, 'image/png');
+      const qrBlob = dataUrlToBlob(canvas.toDataURL('image/png'));
+      const safeDocNo = sanitizeFileNamePart(invoiceNo, 'qr');
+      await shareOrDownloadFile({
+        blob: qrBlob,
+        fileName: `Pay_${safeDocNo}.png`,
+        title: `Pay Invoice ${invoiceNo}`,
+        text: `UPI Payment QR for Invoice #${invoiceNo} (${currency} ${Number(grandTotal).toFixed(2)})`,
       });
     } catch (err) {
       console.error('Error sharing QR Code:', err);
@@ -990,22 +1026,23 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   );
 
   const isA5 = printFormat === 'a5';
+  const isLongInvoice = isA5 ? items.length > 7 : items.length > 13;
 
   const InvoiceContent = () => (
-    <div 
-      className={`flex flex-col bg-white text-slate-800 ${hiddenRenderer ? 'w-[800px] min-h-[1100px] box-border p-10 text-[13px]' : isA5 ? 'p-2 sm:p-4 text-[9px] print:p-3' : 'p-2.5 sm:p-8 text-[11px] sm:text-[12px] print:p-6 print:text-[11px]'} print:flex-1 print:overflow-visible`}
+    <div
+      className={`invoice-print-sheet flex flex-col bg-white text-slate-800 ${hiddenRenderer ? 'w-[800px] min-h-[1100px] box-border p-10 text-[13px]' : isA5 ? 'p-2 sm:p-4 text-[9px] print:p-0 print:text-[8.5px] print:leading-tight' : 'p-2.5 sm:p-8 text-[11px] sm:text-[12px] print:p-0 print:text-[10px] print:leading-tight'} ${isLongInvoice ? 'print:block' : 'print:flex-1'} print:overflow-visible`}
       style={{ fontFamily: "'Inter', sans-serif" }}
     >
       {/* Header */}
-      <div className={`flex justify-between items-start gap-3 ${isA5 ? 'mb-2 sm:mb-3' : 'mb-3 sm:mb-5'}`}>
-        <div className="flex items-start gap-3 sm:gap-4">
+      <div className={`print-avoid-break flex justify-between items-start gap-3 ${isA5 ? 'mb-2 sm:mb-3 print:mb-1.5' : 'mb-3 sm:mb-5 print:mb-2'}`}>
+        <div className="flex items-start gap-3 sm:gap-4 print:gap-3">
           {settings?.logoImage && (
-            <img src={settings.logoImage} alt="Logo" className={`${isA5 ? 'max-h-10 max-w-[70px]' : 'max-h-16 sm:max-h-20 max-w-[110px] sm:max-w-[150px]'} w-auto h-auto object-contain object-left shrink-0`} />
+            <img src={settings.logoImage} alt="Logo" className={`${isA5 ? 'max-h-10 max-w-[70px] print:max-h-9' : 'max-h-16 sm:max-h-20 max-w-[110px] sm:max-w-[150px] print:max-h-14 print:max-w-[120px]'} w-auto h-auto object-contain object-left shrink-0`} />
           )}
           <div>
-            <h1 className={`${isA5 ? 'text-sm sm:text-base' : settings?.logoImage ? 'text-base sm:text-xl' : 'text-xl sm:text-2xl'} font-bold text-[#04325E] uppercase tracking-tight leading-snug`}>{settings?.shopName || 'POS Suite 360'}</h1>
-            {settings?.invoiceTitle && <p className={`text-[#1A63A8] font-bold ${isA5 ? 'text-[8px] sm:text-[9px]' : 'text-xs sm:text-sm'} mt-0.5`}>{settings.invoiceTitle}</p>}
-            <div className={`${isA5 ? 'mt-1 text-[8px]' : 'mt-1 sm:mt-1.5 text-[10px] sm:text-xs'} text-slate-700 leading-relaxed`}>
+            <h1 className={`${isA5 ? 'text-sm sm:text-base print:text-sm' : settings?.logoImage ? 'text-base sm:text-xl print:text-lg' : 'text-xl sm:text-2xl print:text-xl'} font-bold text-[#04325E] uppercase tracking-tight leading-snug`}>{settings?.shopName || 'POS Suite 360'}</h1>
+            {settings?.invoiceTitle && <p className={`text-[#1A63A8] font-bold ${isA5 ? 'text-[8px] sm:text-[9px]' : 'text-xs sm:text-sm print:text-xs'} mt-0.5`}>{settings.invoiceTitle}</p>}
+            <div className={`${isA5 ? 'mt-1 text-[8px]' : 'mt-1 sm:mt-1.5 text-[10px] sm:text-xs print:mt-1 print:text-[10px]'} text-slate-700 leading-relaxed print:leading-snug`}>
               {settings?.shopAddress && <p>{settings.shopAddress}</p>}
               <p className="font-semibold text-slate-700">{[settings?.city, settings?.state, settings?.country].filter(Boolean).join(', ')}</p>
               <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
@@ -1016,17 +1053,17 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
           </div>
         </div>
         <div className="text-right shrink-0">
-          <h2 className={`${isA5 ? 'text-base sm:text-lg' : 'text-xl sm:text-3xl'} font-black text-[#1A63A8] tracking-wider mb-0.5 sm:mb-1`}>{isEstimation ? 'BILL' : 'TAX INVOICE'}</h2>
-          <p className={`font-bold text-slate-700 ${isA5 ? 'text-[8px] sm:text-[9px]' : 'text-xs sm:text-sm'}`}>{isEstimation ? 'Est No' : 'Invoice No'}: #{invoiceNo}</p>
+          <h2 className={`${isA5 ? 'text-base sm:text-lg print:text-base' : 'text-xl sm:text-3xl print:text-2xl'} font-black text-[#1A63A8] tracking-wider mb-0.5 sm:mb-1`}>{isEstimation ? 'BILL' : 'TAX INVOICE'}</h2>
+          <p className={`font-bold text-slate-700 ${isA5 ? 'text-[8px] sm:text-[9px]' : 'text-xs sm:text-sm print:text-xs'}`}>{isEstimation ? 'Est No' : 'Invoice No'}: #{invoiceNo}</p>
         </div>
       </div>
 
       {/* Info Cards: Buyer & Invoice Details */}
-      <div className={`grid grid-cols-1 sm:grid-cols-2 print:grid-cols-2 gap-2 sm:gap-4 ${isA5 ? 'mb-2' : 'mb-3 sm:mb-4'}`}>
-        <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-2' : 'p-2.5 sm:p-3.5'}`}>
-          <h3 className="text-[9px] font-black text-[#1A63A8] uppercase tracking-widest mb-1">Buyer / Billed To</h3>
-          <p className={`font-bold text-slate-900 ${isA5 ? 'text-[9px]' : 'text-xs sm:text-sm'} mb-0.5`}>{customerName}</p>
-          <div className={`${isA5 ? 'text-[8px]' : 'text-[10px] sm:text-[11px]'} text-slate-700 space-y-0.5 leading-snug`}>
+      <div className={`print-avoid-break grid grid-cols-1 sm:grid-cols-2 print:grid-cols-2 gap-2 sm:gap-4 ${isA5 ? 'mb-2 print:gap-1.5 print:mb-1.5' : 'mb-3 sm:mb-4 print:gap-2.5 print:mb-2.5'}`}>
+        <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-2 print:p-1.5' : 'p-2.5 sm:p-3.5 print:p-2.5'}`}>
+          <h3 className="text-[9px] font-black text-[#1A63A8] uppercase tracking-widest mb-1 print:mb-0.5">Buyer / Billed To</h3>
+          <p className={`font-bold text-slate-900 ${isA5 ? 'text-[9px] print:text-[8.5px]' : 'text-xs sm:text-sm print:text-xs'} mb-0.5`}>{customerName}</p>
+          <div className={`${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[10px] sm:text-[11px] print:text-[10px]'} text-slate-700 space-y-0.5 leading-snug`}>
             {sale?.customer?.address && <p>{sale.customer.address}</p>}
             {(custStateInfo.name || custStateInfo.code) && (
               <p className="flex flex-wrap gap-x-3">
@@ -1038,9 +1075,9 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
             {sale?.customer?.gstNumber && <p>GSTIN: <strong className="text-slate-900">{sale.customer.gstNumber}</strong></p>}
           </div>
         </div>
-        <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-2' : 'p-2.5 sm:p-3.5'}`}>
-          <h3 className="text-[9px] font-black text-[#1A63A8] uppercase tracking-widest mb-1">{isEstimation ? 'Estimation Details' : 'Invoice Details'}</h3>
-          <div className={`grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 sm:gap-y-1 ${isA5 ? 'text-[8px]' : 'text-[10px] sm:text-[11px]'}`}>
+        <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-2 print:p-1.5' : 'p-2.5 sm:p-3.5 print:p-2.5'}`}>
+          <h3 className="text-[9px] font-black text-[#1A63A8] uppercase tracking-widest mb-1 print:mb-0.5">{isEstimation ? 'Estimation Details' : 'Invoice Details'}</h3>
+          <div className={`grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 sm:gap-y-1 print:gap-y-0.5 ${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[10px] sm:text-[11px] print:text-[10px]'}`}>
             <span className="font-bold text-slate-600">{isEstimation ? 'Est No:' : 'Invoice No:'}</span>
             <span className="text-slate-900 font-bold">#{invoiceNo}</span>
             <span className="font-bold text-slate-600">Invoice Date:</span>
@@ -1064,21 +1101,21 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       </div>
 
       {/* Items Table */}
-      <div className={`border border-slate-200 rounded-lg ${isA5 ? 'mb-2' : 'mb-3 sm:mb-4'} overflow-x-auto print:overflow-visible`}>
+      <div className={`border border-slate-200 rounded-lg ${isA5 ? 'mb-2 print:mb-1.5' : 'mb-3 sm:mb-4 print:mb-2.5'} overflow-x-auto print:overflow-visible`}>
         <table className="w-full text-left border-collapse">
-          <thead className="bg-[#2D6AA1] text-white uppercase tracking-wider text-[7.5px] sm:text-[9.5px] print:text-[9.5px]">
+          <thead className={`bg-[#2D6AA1] text-white uppercase tracking-wider ${isA5 ? 'text-[7px] print:text-[7px]' : 'text-[7.5px] sm:text-[9.5px] print:text-[8.5px]'}`}>
             <tr>
-              <th className="py-2 px-1 sm:py-2.5 sm:px-2 font-bold text-center w-[6%]">S.No</th>
-              <th className="py-2 px-1.5 sm:py-2.5 sm:px-2.5 font-bold">Description of Goods</th>
-              <th className="py-2 px-1 sm:py-2.5 sm:px-2 font-bold text-center">HSN</th>
-              {showTaxColumns && <th className="py-2 px-1 sm:py-2.5 sm:px-2 font-bold text-center">GST %</th>}
-              <th className="py-2 px-1 sm:py-2.5 sm:px-2 font-bold text-center">Qty</th>
-              <th className="py-2 px-1 sm:py-2.5 sm:px-2 font-bold text-right">Rate</th>
-              {showMrpColumn && <th className="py-2 px-1 sm:py-2.5 sm:px-2 font-bold text-right">MRP</th>}
-              <th className="py-2 px-1.5 sm:py-2.5 sm:px-2.5 font-bold text-right">Amount</th>
+              <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-center w-[6%]`}>S.No</th>
+              <th className={`py-2 px-1.5 sm:py-2.5 sm:px-2.5 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-2'} font-bold`}>Description of Goods</th>
+              <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-center`}>HSN</th>
+              {showTaxColumns && <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-center`}>GST %</th>}
+              <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-center`}>Qty</th>
+              <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-right`}>Rate</th>
+              {showMrpColumn && <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-right`}>MRP</th>}
+              <th className={`py-2 px-1.5 sm:py-2.5 sm:px-2.5 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-2'} font-bold text-right`}>Amount</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100 text-[8.5px] sm:text-[10.5px] print:text-[10.5px]">
+          <tbody className={`divide-y divide-slate-100 ${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[8.5px] sm:text-[10.5px] print:text-[9.5px]'}`}>
             {items.map((item: any, idx: number) => {
               const displayName = item.isService 
                 ? (item.itemName || item.serviceItem?.name || '')
@@ -1093,56 +1130,56 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
               const mrpVal = Number(!item.isService ? item.product?.mrp : 0) || 0;
               return (
                 <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                  <td className="py-1.5 px-1 sm:py-2 sm:px-2 text-center text-slate-500 font-medium">{idx + 1}</td>
-                  <td className="py-1.5 px-1.5 sm:py-2 sm:px-2.5">
+                  <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-500 font-medium`}>{idx + 1}</td>
+                  <td className={`py-1.5 px-1.5 sm:py-2 sm:px-2.5 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-2'}`}>
                     <span className="font-bold text-slate-800 break-words">{displayName}</span>
                     {!item.isService && item.product?.code && (
-                      <span className="text-slate-500 text-[7.5px] sm:text-[9px] ml-1 whitespace-nowrap">({item.product.code})</span>
+                      <span className="text-slate-500 text-[7.5px] sm:text-[9px] print:text-[8.5px] ml-1 whitespace-nowrap">({item.product.code})</span>
                     )}
                   </td>
-                  <td className="py-1.5 px-1 sm:py-2 sm:px-2 text-center text-slate-600">{!item.isService ? (item.product?.hsnCode || '-') : '-'}</td>
+                  <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-600`}>{!item.isService ? (item.product?.hsnCode || '-') : '-'}</td>
                   {showTaxColumns && (
-                    <td className="py-1.5 px-1 sm:py-2 sm:px-2 text-center text-slate-600 whitespace-nowrap">
+                    <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-600 whitespace-nowrap`}>
                       {gstRate > 0 ? `GST ${gstRate}%` : '0%'}
                     </td>
                   )}
-                  <td className="py-1.5 px-1 sm:py-2 sm:px-2 text-center text-slate-700 font-medium whitespace-nowrap">
+                  <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-700 font-medium whitespace-nowrap`}>
                     {Number(item.quantity || 0)} {item.isService ? 'Svc' : (item.product?.unit?.shortCode || 'Nos')}
                   </td>
-                  <td className="py-1.5 px-1 sm:py-2 sm:px-2 text-right text-slate-700 whitespace-nowrap">{Number(item.rate || 0).toFixed(2)}</td>
+                  <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-right text-slate-700 whitespace-nowrap`}>{Number(item.rate || 0).toFixed(2)}</td>
                   {showMrpColumn && (
-                    <td className="py-1.5 px-1 sm:py-2 sm:px-2 text-right text-slate-500 whitespace-nowrap">
+                    <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-right text-slate-500 whitespace-nowrap`}>
                       {mrpVal > 0 ? mrpVal.toFixed(2) : '-'}
                     </td>
                   )}
-                  <td className="py-1.5 px-1.5 sm:py-2 sm:px-2.5 text-right font-bold text-slate-900 whitespace-nowrap">{itemAmt.toFixed(2)}</td>
+                  <td className={`py-1.5 px-1.5 sm:py-2 sm:px-2.5 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-2'} text-right font-bold text-slate-900 whitespace-nowrap`}>{itemAmt.toFixed(2)}</td>
                 </tr>
               );
             })}
           </tbody>
           <tfoot>
-            <tr className="bg-[#F0F5FA] border-t-2 border-[#1A63A8] text-[#04325E] font-bold text-[8.5px] sm:text-[10.5px] print:text-[10.5px]">
-              <td className="py-1.5 px-1 sm:py-2 sm:px-2 text-center"></td>
-              <td className="py-1.5 px-1.5 sm:py-2 sm:px-2.5 uppercase tracking-wide">Total</td>
-              <td className="py-1.5 px-1 sm:py-2 sm:px-2"></td>
-              {showTaxColumns && <td className="py-1.5 px-1 sm:py-2 sm:px-2"></td>}
-              <td className="py-1.5 px-1 sm:py-2 sm:px-2 text-center whitespace-nowrap">{Number(totalQty).toFixed(2)}</td>
-              <td className="py-1.5 px-1 sm:py-2 sm:px-2"></td>
-              {showMrpColumn && <td className="py-1.5 px-1 sm:py-2 sm:px-2"></td>}
-              <td className="py-1.5 px-1.5 sm:py-2 sm:px-2.5 text-right whitespace-nowrap">{currency} {itemsAmountSum.toFixed(2)}</td>
+            <tr className={`bg-[#F0F5FA] border-t-2 border-[#1A63A8] text-[#04325E] font-bold ${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[8.5px] sm:text-[10.5px] print:text-[9.5px]'}`}>
+              <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-center`}></td>
+              <td className={`py-1.5 px-1.5 sm:py-2 sm:px-2.5 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-2'} uppercase tracking-wide`}>Total</td>
+              <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>
+              {showTaxColumns && <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>}
+              <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-center whitespace-nowrap`}>{Number(totalQty).toFixed(2)}</td>
+              <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>
+              {showMrpColumn && <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>}
+              <td className={`py-1.5 px-1.5 sm:py-2 sm:px-2.5 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-2'} text-right whitespace-nowrap`}>{currency} {itemsAmountSum.toFixed(2)}</td>
             </tr>
           </tfoot>
         </table>
       </div>
 
       {/* Totals & Left Details Grid */}
-      <div className={`grid gap-3 ${isA5 ? 'grid-cols-[1fr_165px] mb-2' : 'grid-cols-1 sm:grid-cols-[1fr_320px] print:grid-cols-[1fr_320px] sm:gap-5 mb-3'}`}>
+      <div className={`print-avoid-break grid gap-3 ${isA5 ? 'grid-cols-[1fr_165px] mb-2 print:gap-2 print:mb-1.5' : 'grid-cols-1 sm:grid-cols-[1fr_320px] print:grid-cols-[1fr_290px] sm:gap-5 print:gap-3 mb-3 print:mb-2'}`}>
         {/* Left: Bank Details + Terms */}
-        <div className="flex flex-col gap-2 order-2 sm:order-1 print:order-1">
+        <div className="flex flex-col gap-2 print:gap-1.5 order-2 sm:order-1 print:order-1">
           {hasBankDetails && (
-            <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-2' : 'p-2.5 sm:p-3'}`}>
-              <h3 className="text-[9px] font-bold text-[#1A63A8] uppercase tracking-widest mb-1">Company&apos;s Bank Details</h3>
-              <div className={`grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 ${isA5 ? 'text-[8px]' : 'text-[10px] sm:text-[11px]'} text-slate-700`}>
+            <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-2 print:p-1.5' : 'p-2.5 sm:p-3 print:p-2'}`}>
+              <h3 className="text-[9px] font-bold text-[#1A63A8] uppercase tracking-widest mb-1 print:mb-0.5">Company&apos;s Bank Details</h3>
+              <div className={`grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 ${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[10px] sm:text-[11px] print:text-[9.5px]'} text-slate-700`}>
                 {settings?.bankName && (
                   <>
                     <span className="font-bold text-slate-600">Bank Name:</span>
@@ -1165,10 +1202,10 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
             </div>
           )}
 
-          <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-2' : 'p-2.5 sm:p-3'} flex-1 flex flex-col`}>
-            <h3 className="text-[9px] font-bold text-[#1A63A8] uppercase tracking-widest mb-1">Terms &amp; Conditions</h3>
+          <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-2 print:p-1.5' : 'p-2.5 sm:p-3 print:p-2'} flex-1 flex flex-col`}>
+            <h3 className="text-[9px] font-bold text-[#1A63A8] uppercase tracking-widest mb-1 print:mb-0.5">Terms &amp; Conditions</h3>
             <div
-              className={`${isA5 ? 'text-[8px]' : 'text-[10px] sm:text-[10.5px]'} text-slate-700 font-medium prose prose-sm max-w-none html-content flex-1`}
+              className={`${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[10px] sm:text-[10.5px] print:text-[9.5px]'} text-slate-700 font-medium prose prose-sm max-w-none html-content flex-1`}
               dangerouslySetInnerHTML={{ __html: (settings?.invoiceNotes !== undefined && settings?.invoiceNotes !== null) ? settings.invoiceNotes : '1. Goods once sold cannot be taken back or exchanged.<br/>2. Subject to Salem jurisdiction.' }}
             />
           </div>
@@ -1176,8 +1213,8 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
 
         {/* Right: Calculation Summary */}
         <div className="flex flex-col justify-start order-1 sm:order-2 print:order-2">
-          <div className={`bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg ${isA5 ? 'pt-2 pb-1' : 'pt-2.5 pb-1.5'} flex flex-col`}>
-            <div className={`${isA5 ? 'space-y-0.5 text-[8.5px] px-2 mb-1' : 'space-y-1.5 text-[11px] sm:text-[12px] px-3 sm:px-4 mb-2'}`}>
+          <div className={`bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg ${isA5 ? 'pt-2 pb-1 print:pt-1.5 print:pb-0.5' : 'pt-2.5 pb-1.5 print:pt-2 print:pb-1'} flex flex-col`}>
+            <div className={`${isA5 ? 'space-y-0.5 text-[8.5px] px-2 mb-1 print:text-[8px]' : 'space-y-1.5 text-[11px] sm:text-[12px] px-3 sm:px-4 mb-2 print:space-y-1 print:text-[10px] print:px-3 print:mb-1.5'}`}>
               <div className="flex justify-between text-[#334155]">
                 <span>Amount:</span>
                 <span className="font-semibold">{subtotalVal.toFixed(2)}</span>
@@ -1223,19 +1260,19 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
                 </div>
               )}
             </div>
-            <div className={`bg-[#F0F5FA] border-t-2 border-[#1A63A8] ${isA5 ? 'px-2 py-1' : 'px-3 py-2 sm:px-4 sm:py-2.5'} flex justify-between items-center text-[#04325E] rounded-b-md`}>
-              <span className={`font-bold ${isA5 ? 'text-[10px]' : 'text-xs sm:text-[14px]'}`}>Total Due:</span>
-              <span className={`font-black tracking-tight ${isA5 ? 'text-[10px]' : 'text-sm sm:text-[15px]'}`}>{currency} {grandTotal.toFixed(2)}</span>
+            <div className={`bg-[#F0F5FA] border-t-2 border-[#1A63A8] ${isA5 ? 'px-2 py-1 print:py-1' : 'px-3 py-2 sm:px-4 sm:py-2.5 print:px-3 print:py-1.5'} flex justify-between items-center text-[#04325E] rounded-b-md`}>
+              <span className={`font-bold ${isA5 ? 'text-[10px] print:text-[9px]' : 'text-xs sm:text-[14px] print:text-[12px]'}`}>Total Due:</span>
+              <span className={`font-black tracking-tight ${isA5 ? 'text-[10px] print:text-[9px]' : 'text-sm sm:text-[15px] print:text-[13px]'}`}>{currency} {grandTotal.toFixed(2)}</span>
             </div>
           </div>
         </div>
       </div>
 
       {/* Amount Chargeable in Words + E. & O.E */}
-      <div className={`bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg ${isA5 ? 'px-2 py-1.5 mb-2' : 'px-3 py-2 sm:px-4 mb-3'} flex justify-between items-start gap-2`}>
+      <div className={`print-avoid-break bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg ${isA5 ? 'px-2 py-1.5 mb-2 print:py-1 print:mb-1.5' : 'px-3 py-2 sm:px-4 mb-3 print:px-3 print:py-1.5 print:mb-2'} flex justify-between items-start gap-2`}>
         <div>
           <p className="text-[8px] sm:text-[9px] font-bold text-slate-500 uppercase tracking-wider">Amount Chargeable (in words)</p>
-          <p className={`${isA5 ? 'text-[8px]' : 'text-[10px] sm:text-[11px]'} font-extrabold text-[#04325E] uppercase mt-0.5`}>
+          <p className={`${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[10px] sm:text-[11px] print:text-[10px]'} font-extrabold text-[#04325E] uppercase mt-0.5`}>
             {numberToWords(grandTotal, isIndianCurrency)}
           </p>
         </div>
@@ -1244,102 +1281,104 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
 
       {/* GST Rate-wise Tax Breakdown Table */}
       {showTaxColumns && taxBreakdownRows.length > 0 && (
-        <div className={`border border-slate-200 rounded-lg ${isA5 ? 'mb-2' : 'mb-3'} overflow-x-auto print:overflow-visible`}>
+        <div className={`print-avoid-break border border-slate-200 rounded-lg ${isA5 ? 'mb-2 print:mb-1.5' : 'mb-3 print:mb-2'} overflow-x-auto print:overflow-visible`}>
           <table className="w-full text-center border-collapse">
-            <thead className="bg-[#2D6AA1] text-white uppercase tracking-wider text-[7px] sm:text-[8.5px] print:text-[8.5px]">
+            <thead className={`bg-[#2D6AA1] text-white uppercase tracking-wider ${isA5 ? 'text-[6.5px] print:text-[6.5px]' : 'text-[7px] sm:text-[8.5px] print:text-[7.5px]'}`}>
               <tr>
-                <th rowSpan={2} className="py-1.5 px-2 font-bold text-left border-r border-white/20">GST Rate</th>
-                <th rowSpan={2} className="py-1.5 px-2 font-bold text-right border-r border-white/20">Taxable Value</th>
-                <th colSpan={2} className="py-1 px-2 font-bold border-b border-r border-white/20">CGST</th>
-                <th colSpan={2} className="py-1 px-2 font-bold border-b border-r border-white/20">SGST</th>
-                <th colSpan={2} className="py-1 px-2 font-bold border-b border-white/20">IGST</th>
+                <th rowSpan={2} className="py-1.5 px-2 print:py-1 print:px-1.5 font-bold text-left border-r border-white/20">GST Rate</th>
+                <th rowSpan={2} className="py-1.5 px-2 print:py-1 print:px-1.5 font-bold text-right border-r border-white/20">Taxable Value</th>
+                <th colSpan={2} className="py-1 px-2 print:py-0.5 print:px-1.5 font-bold border-b border-r border-white/20">CGST</th>
+                <th colSpan={2} className="py-1 px-2 print:py-0.5 print:px-1.5 font-bold border-b border-r border-white/20">SGST</th>
+                <th colSpan={2} className="py-1 px-2 print:py-0.5 print:px-1.5 font-bold border-b border-white/20">IGST</th>
               </tr>
               <tr>
-                <th className="py-1 px-1.5 font-bold border-r border-white/20">Rate</th>
-                <th className="py-1 px-1.5 font-bold text-right border-r border-white/20">Amount</th>
-                <th className="py-1 px-1.5 font-bold border-r border-white/20">Rate</th>
-                <th className="py-1 px-1.5 font-bold text-right border-r border-white/20">Amount</th>
-                <th className="py-1 px-1.5 font-bold border-r border-white/20">Rate</th>
-                <th className="py-1 px-1.5 font-bold text-right">Amount</th>
+                <th className="py-1 px-1.5 print:py-0.5 print:px-1 font-bold border-r border-white/20">Rate</th>
+                <th className="py-1 px-1.5 print:py-0.5 print:px-1 font-bold text-right border-r border-white/20">Amount</th>
+                <th className="py-1 px-1.5 print:py-0.5 print:px-1 font-bold border-r border-white/20">Rate</th>
+                <th className="py-1 px-1.5 print:py-0.5 print:px-1 font-bold text-right border-r border-white/20">Amount</th>
+                <th className="py-1 px-1.5 print:py-0.5 print:px-1 font-bold border-r border-white/20">Rate</th>
+                <th className="py-1 px-1.5 print:py-0.5 print:px-1 font-bold text-right">Amount</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-[8px] sm:text-[10px] print:text-[10px]">
+            <tbody className={`divide-y divide-slate-100 ${isA5 ? 'text-[7.5px] print:text-[7px]' : 'text-[8px] sm:text-[10px] print:text-[9px]'}`}>
               {taxBreakdownRows.map((row, idx) => (
                 <tr key={idx} className="bg-white">
-                  <td className="py-1.5 px-2 text-left font-semibold text-slate-800">GST {row.rate} %</td>
-                  <td className="py-1.5 px-2 text-right text-slate-700">{row.taxable.toFixed(2)}</td>
-                  <td className="py-1.5 px-1.5 text-slate-600">{isIntraState ? `${row.rate / 2} %` : '0 %'}</td>
-                  <td className="py-1.5 px-1.5 text-right text-slate-700">{row.cgst.toFixed(2)}</td>
-                  <td className="py-1.5 px-1.5 text-slate-600">{isIntraState ? `${row.rate / 2} %` : '0 %'}</td>
-                  <td className="py-1.5 px-1.5 text-right text-slate-700">{row.sgst.toFixed(2)}</td>
-                  <td className="py-1.5 px-1.5 text-slate-600">{!isIntraState ? `${row.rate} %` : '0 %'}</td>
-                  <td className="py-1.5 px-1.5 text-right text-slate-700">{row.igst.toFixed(2)}</td>
+                  <td className="py-1.5 px-2 print:py-1 print:px-1.5 text-left font-semibold text-slate-800">GST {row.rate} %</td>
+                  <td className="py-1.5 px-2 print:py-1 print:px-1.5 text-right text-slate-700">{row.taxable.toFixed(2)}</td>
+                  <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-slate-600">{isIntraState ? `${row.rate / 2} %` : '0 %'}</td>
+                  <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-right text-slate-700">{row.cgst.toFixed(2)}</td>
+                  <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-slate-600">{isIntraState ? `${row.rate / 2} %` : '0 %'}</td>
+                  <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-right text-slate-700">{row.sgst.toFixed(2)}</td>
+                  <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-slate-600">{!isIntraState ? `${row.rate} %` : '0 %'}</td>
+                  <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-right text-slate-700">{row.igst.toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
-              <tr className="bg-[#F0F5FA] border-t border-[#1A63A8] text-[#04325E] font-bold text-[8px] sm:text-[10px] print:text-[10px]">
-                <td className="py-1.5 px-2 text-left">Total</td>
-                <td className="py-1.5 px-2 text-right">{taxBreakdownRows.reduce((s, r) => s + r.taxable, 0).toFixed(2)}</td>
-                <td className="py-1.5 px-1.5"></td>
-                <td className="py-1.5 px-1.5 text-right">{taxBreakdownRows.reduce((s, r) => s + r.cgst, 0).toFixed(2)}</td>
-                <td className="py-1.5 px-1.5"></td>
-                <td className="py-1.5 px-1.5 text-right">{taxBreakdownRows.reduce((s, r) => s + r.sgst, 0).toFixed(2)}</td>
-                <td className="py-1.5 px-1.5"></td>
-                <td className="py-1.5 px-1.5 text-right">{taxBreakdownRows.reduce((s, r) => s + r.igst, 0).toFixed(2)}</td>
+              <tr className={`bg-[#F0F5FA] border-t border-[#1A63A8] text-[#04325E] font-bold ${isA5 ? 'text-[7.5px] print:text-[7px]' : 'text-[8px] sm:text-[10px] print:text-[9px]'}`}>
+                <td className="py-1.5 px-2 print:py-1 print:px-1.5 text-left">Total</td>
+                <td className="py-1.5 px-2 print:py-1 print:px-1.5 text-right">{taxBreakdownRows.reduce((s, r) => s + r.taxable, 0).toFixed(2)}</td>
+                <td className="py-1.5 px-1.5 print:py-1 print:px-1"></td>
+                <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-right">{taxBreakdownRows.reduce((s, r) => s + r.cgst, 0).toFixed(2)}</td>
+                <td className="py-1.5 px-1.5 print:py-1 print:px-1"></td>
+                <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-right">{taxBreakdownRows.reduce((s, r) => s + r.sgst, 0).toFixed(2)}</td>
+                <td className="py-1.5 px-1.5 print:py-1 print:px-1"></td>
+                <td className="py-1.5 px-1.5 print:py-1 print:px-1 text-right">{taxBreakdownRows.reduce((s, r) => s + r.igst, 0).toFixed(2)}</td>
               </tr>
             </tfoot>
           </table>
-          <div className={`bg-slate-50 border-t border-slate-200 ${isA5 ? 'px-2 py-1 text-[7.5px]' : 'px-3 py-1.5 text-[9px] sm:text-[10px]'} flex flex-wrap gap-x-2`}>
+          <div className={`bg-slate-50 border-t border-slate-200 ${isA5 ? 'px-2 py-1 text-[7.5px]' : 'px-3 py-1.5 print:px-2.5 print:py-1 text-[9px] sm:text-[10px] print:text-[9px]'} flex flex-wrap gap-x-2`}>
             <span className="font-bold text-slate-600">Tax Amount (in words):</span>
             <span className="font-extrabold text-[#1A63A8] uppercase">{numberToWords(totalTaxVal, isIndianCurrency)}</span>
           </div>
         </div>
       )}
 
-      {/* Bottom Bar: QR Code & Authorised Signatory */}
-      <div className="mt-auto pt-2 flex flex-col sm:flex-row print:flex-row justify-between items-stretch sm:items-end print:items-end gap-3">
-        <div>
-          {activeUpiId && grandTotal > 0 && (
-            <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-1.5' : 'p-2 sm:p-2.5'} flex items-center gap-2.5`}>
-              <div className="bg-white p-1 rounded border border-slate-200 shadow-sm shrink-0">
-                <QRCodeCanvas
-                  id="upi-qr-code-canvas"
-                  value={`upi://pay?pa=${activeUpiId.trim()}&pn=${encodeURIComponent(settings?.shopName || 'Shop')}&tr=${encodeURIComponent(invoiceNo)}&am=${Number(grandTotal).toFixed(2)}&cu=INR`}
-                  size={900}
-                  level="M"
-                  style={{ width: isA5 ? 40 : 52, height: isA5 ? 40 : 52 }}
-                />
+      {/* Bottom Bar & Footer kept together so signature never orphans */}
+      <div className="mt-auto print-avoid-break">
+        <div className="pt-2 print:pt-1 flex flex-col sm:flex-row print:flex-row justify-between items-stretch sm:items-end print:items-end gap-3">
+          <div>
+            {activeUpiId && grandTotal > 0 && (
+              <div className={`bg-slate-50 border border-slate-200/80 rounded-lg ${isA5 ? 'p-1.5' : 'p-2 sm:p-2.5 print:p-1.5'} flex items-center gap-2.5`}>
+                <div className="bg-white p-1 rounded border border-slate-200 shadow-sm shrink-0">
+                  <QRCodeCanvas
+                    id="upi-qr-code-canvas"
+                    value={`upi://pay?pa=${activeUpiId.trim()}&pn=${encodeURIComponent(settings?.shopName || 'Shop')}&tr=${encodeURIComponent(invoiceNo)}&am=${Number(grandTotal).toFixed(2)}&cu=INR`}
+                    size={900}
+                    level="M"
+                    style={{ width: isA5 ? 40 : 48, height: isA5 ? 40 : 48 }}
+                  />
+                </div>
+                <div>
+                  <p className="text-[9px] font-bold text-slate-800 uppercase tracking-widest">Scan to Pay</p>
+                  <p className="text-[8px] text-slate-500 mt-0.5">UPI: {activeUpiId.trim()}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-[9px] font-bold text-slate-800 uppercase tracking-widest">Scan to Pay</p>
-                <p className="text-[8px] text-slate-500 mt-0.5">UPI: {activeUpiId.trim()}</p>
+            )}
+          </div>
+
+          {!isEstimation && (
+            <div className="text-right relative ml-auto">
+              <p className={`${isA5 ? 'text-[8px] mb-5 print:mb-4' : 'text-[9px] sm:text-[10px] mb-7 sm:mb-9 print:mb-6'} font-bold text-[#04325E] uppercase`}>
+                For {settings?.shopName || 'POS Suite 360'}
+              </p>
+              {settings?.signatureImage && (
+                <img src={settings.signatureImage} alt="Authorised Signature" className="absolute bottom-5 right-4 h-8 sm:h-9 print:h-7 object-contain opacity-90 mix-blend-multiply" />
+              )}
+              <div className="inline-block border-t border-slate-400 pt-1 px-4 sm:px-6 min-w-[130px] sm:min-w-[160px]">
+                <p className="text-[8px] sm:text-[9.5px] font-bold text-slate-700 text-center">Authorised Signatory</p>
               </div>
             </div>
           )}
         </div>
 
-        {!isEstimation && (
-          <div className="text-right relative ml-auto">
-            <p className={`${isA5 ? 'text-[8px]' : 'text-[9px] sm:text-[10px]'} font-bold text-[#04325E] uppercase mb-7 sm:mb-9`}>
-              For {settings?.shopName || 'POS Suite 360'}
-            </p>
-            {settings?.signatureImage && (
-              <img src={settings.signatureImage} alt="Authorised Signature" className="absolute bottom-5 right-4 h-8 sm:h-9 object-contain opacity-90 mix-blend-multiply" />
-            )}
-            <div className="inline-block border-t border-slate-400 pt-1 px-4 sm:px-6 min-w-[130px] sm:min-w-[160px]">
-              <p className="text-[8px] sm:text-[9.5px] font-bold text-slate-700 text-center">Authorised Signatory</p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Footer */}
-      <div className={`${isA5 ? 'mt-2' : 'mt-3 sm:mt-4'} text-center text-[8.5px] sm:text-[9px] font-medium text-slate-600 border-t border-slate-200 pt-2 space-y-0.5`}>
-        {settings?.jurisdiction && (
-          <p className="font-bold text-slate-700 uppercase tracking-wide">{settings.jurisdiction}</p>
-        )}
-        <p className="text-slate-500">This is a computer generated invoice | Thank you for partnering with {settings?.shopName || 'POS Suite 360'}! | Page 1 of 1</p>
+        {/* Footer */}
+        <div className={`${isA5 ? 'mt-2 print:mt-1.5' : 'mt-3 sm:mt-4 print:mt-2'} text-center text-[8.5px] sm:text-[9px] print:text-[8px] font-medium text-slate-600 border-t border-slate-200 pt-2 print:pt-1.5 space-y-0.5`}>
+          {settings?.jurisdiction && (
+            <p className="font-bold text-slate-700 uppercase tracking-wide">{settings.jurisdiction}</p>
+          )}
+          <p className="text-slate-500">This is a computer generated invoice | Thank you for partnering with {settings?.shopName || 'POS Suite 360'}!</p>
+        </div>
       </div>
     </div>
   );
@@ -1353,8 +1392,8 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   }
 
   return createPortal(
-    <div className={`fixed inset-0 z-[9999] flex items-center justify-center p-1 sm:p-4 print:absolute print:inset-0 print:block print:bg-transparent print:m-0 print:p-0 ${autoPrint ? 'opacity-0 pointer-events-none print:opacity-100' : 'bg-black/60'}`}>
-      <div className={`bg-white w-full max-w-4xl h-[98vh] sm:h-auto sm:max-h-[90vh] flex flex-col rounded-lg sm:rounded-xl relative print:w-full print:max-w-none print:shadow-none print:h-auto print:min-h-0 ${!autoPrint && 'shadow-2xl'}`}>
+    <div id="invoice-print-portal" className={`fixed inset-0 z-[9999] flex items-center justify-center p-1 sm:p-4 print:static print:block print:bg-transparent print:m-0 print:p-0 ${autoPrint ? 'opacity-0 pointer-events-none print:opacity-100' : 'bg-black/60'}`}>
+      <div id="invoice-print-portal-card" className={`bg-white w-full max-w-4xl h-[98vh] sm:h-auto sm:max-h-[90vh] flex flex-col rounded-lg sm:rounded-xl relative print:w-full print:max-w-none print:max-h-none print:rounded-none print:shadow-none print:h-auto print:min-h-0 ${!autoPrint && 'shadow-2xl'}`}>
 
         {/* Header - Screen Only */}
         {!autoPrint && (
@@ -1374,23 +1413,99 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
           </div>
         )}
 
-        {/* Print format style injection */}
+        {/* Print format & pagination style injection */}
         <style>{`
+          .invoice-print-sheet table tfoot td,
+          .invoice-print-sheet table tfoot th {
+            color: #04325E !important;
+          }
           @media print {
             @page {
               size: ${printFormat === 'thermal' ? '80mm auto' : printFormat === 'a5' ? 'A5 portrait' : 'A4 portrait'};
-              margin: ${printFormat === 'thermal' ? '4mm' : '10mm'};
+              margin: ${printFormat === 'thermal' ? '3mm' : printFormat === 'a5' ? '5mm 6mm' : '7mm 8mm'};
+            }
+            html, body {
+              height: auto !important;
+              min-height: 0 !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              background: #ffffff !important;
+              overflow: visible !important;
+            }
+            body > *:not(#invoice-print-portal) {
+              display: none !important;
+            }
+            #invoice-print-portal {
+              position: static !important;
+              display: block !important;
+              width: 100% !important;
+              height: auto !important;
+              min-height: 0 !important;
+              max-height: none !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              background: #ffffff !important;
+              overflow: visible !important;
+            }
+            #invoice-print-portal-card {
+              position: static !important;
+              display: block !important;
+              width: 100% !important;
+              max-width: none !important;
+              height: auto !important;
+              min-height: 0 !important;
+              max-height: none !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              border-radius: 0 !important;
+              box-shadow: none !important;
+              overflow: visible !important;
+            }
+            #printable-invoice {
+              display: block !important;
+              width: 100% !important;
+              height: auto !important;
+              min-height: 0 !important;
+              max-height: none !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              background: #ffffff !important;
+              overflow: visible !important;
+            }
+            #invoice-print-portal-paper {
+              width: 100% !important;
+              max-width: none !important;
+              height: auto !important;
+              box-shadow: none !important;
+              overflow: visible !important;
+            }
+            .invoice-print-sheet {
+              overflow: visible !important;
+            }
+            .invoice-print-sheet thead {
+              display: table-header-group;
+            }
+            .invoice-print-sheet tfoot {
+              display: table-row-group;
+            }
+            .invoice-print-sheet tr {
+              break-inside: avoid;
+              page-break-inside: avoid;
+            }
+            .print-avoid-break {
+              break-inside: avoid;
+              page-break-inside: avoid;
             }
           }
         `}</style>
 
         {/* Printable Area */}
         <div id="printable-invoice" className="flex-1 min-h-0 overflow-auto bg-gray-200 p-1 sm:p-8 print:p-0 print:bg-white flex justify-center print:overflow-visible">
-          <div className={`bg-white shadow-sm flex flex-col print:w-full print:max-w-none print:shadow-none ${printFormat === 'thermal'
+          <div id="invoice-print-portal-paper" className={`bg-white shadow-sm flex flex-col print:w-full print:max-w-none print:shadow-none ${printFormat === 'thermal'
               ? 'w-[80mm] min-h-0 print:min-h-0'
               : printFormat === 'a5'
-                ? 'w-full max-w-[148mm] min-h-0 sm:min-h-[210mm] print:min-h-[100vh]'
-                : 'w-full max-w-[210mm] min-h-0 sm:min-h-[297mm] print:min-h-[100vh]'
+                ? `w-full max-w-[148mm] min-h-0 sm:min-h-[210mm] ${isLongInvoice ? 'print:block print:min-h-0' : 'print:min-h-[192mm]'}`
+                : `w-full max-w-[210mm] min-h-0 sm:min-h-[297mm] ${isLongInvoice ? 'print:block print:min-h-0' : 'print:min-h-[272mm]'}`
             }`}>
             {printFormat === 'thermal' ? <ThermalContent /> : <InvoiceContent />}
           </div>

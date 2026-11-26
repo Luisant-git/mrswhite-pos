@@ -6,6 +6,8 @@ import { useSettings } from '../../contexts/SettingsContext';
 import { useState } from 'react';
 import InvoicePrintModal from '../../components/InvoicePrintModal';
 import jsPDF from 'jspdf';
+import toast from 'react-hot-toast';
+import { sanitizeFileNamePart, shareOrDownloadFile } from '../../utils/shareFile';
 
 const SalesView = () => {
   const { id } = useParams();
@@ -99,21 +101,18 @@ const SalesView = () => {
     doc.text('Thank you for your business!', W / 2, y, { align: 'center' });
 
     const pdfBlob = doc.output('blob');
-    const file = new File([pdfBlob], `Invoice_${invoiceNo}.pdf`, { type: 'application/pdf' });
+    const safeInvoiceNo = sanitizeFileNamePart(invoiceNo, 'invoice');
     try {
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: `Invoice ${invoiceNo}` });
-      } else {
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(pdfBlob);
-        link.download = `Invoice_${invoiceNo}.pdf`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }
+      await shareOrDownloadFile({
+        blob: pdfBlob,
+        fileName: `Invoice_${safeInvoiceNo}.pdf`,
+        title: `Invoice ${invoiceNo}`,
+        text: `Invoice #${invoiceNo} - ${currency} ${Number(grandTotal).toFixed(2)}`,
+      });
     } catch (err: any) {
-      if (err.name !== 'AbortError') {
+      if (err?.name !== 'AbortError') {
         console.error('Error sharing:', err);
+        toast.error('Failed to share invoice');
       }
     } finally {
       setIsSharing(false);
