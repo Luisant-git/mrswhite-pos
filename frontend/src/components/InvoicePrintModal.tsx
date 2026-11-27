@@ -267,6 +267,23 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   const itemsAmountSum = items.reduce((sum: number, it: any) => sum + Number(it.amount || it.total || 0), 0);
   const amountIsPreTax = Math.abs(subtotalVal - itemsAmountSum) < 0.05 && totalTaxVal > 0;
 
+  const getItemTaxDetails = (it: any) => {
+    const itemAmt = Number(it.amount || it.total || 0);
+    const rawTax = Number(it.tax || 0);
+    const itemTaxable = amountIsPreTax ? itemAmt : Math.max(0, itemAmt - rawTax);
+    let gstRate = Number(!it.isService ? it.product?.taxPercent : it.serviceItem?.taxPercent) || 0;
+    if (gstRate === 0 && rawTax > 0 && itemTaxable > 0) {
+      gstRate = Math.round((rawTax / itemTaxable) * 10000) / 100;
+    }
+    const itemTax = rawTax > 0
+      ? rawTax
+      : (showTaxColumns && gstRate > 0
+          ? (amountIsPreTax ? (itemAmt * gstRate) / 100 : itemAmt - itemAmt / (1 + gstRate / 100))
+          : 0);
+    return { itemAmt, itemTax, itemTaxable, gstRate };
+  };
+  const totalItemsTax = items.reduce((sum: number, it: any) => sum + getItemTaxDetails(it).itemTax, 0);
+
   const cgstTotal = isIntraState ? totalTaxVal / 2 : 0;
   const sgstTotal = isIntraState ? totalTaxVal / 2 : 0;
   const igstTotal = isIntraState ? 0 : totalTaxVal;
@@ -275,21 +292,14 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   const taxBreakdownMap = new Map<number, { rate: number; taxable: number; cgst: number; sgst: number; igst: number }>();
   if (showTaxColumns) {
     items.forEach((it: any) => {
-      const itemAmt = Number(it.amount || it.total || 0);
-      const itemTax = Number(it.tax || 0);
-      const itemTaxable = amountIsPreTax ? itemAmt : Math.max(0, itemAmt - itemTax);
-      let gstRate = Number(!it.isService ? it.product?.taxPercent : it.serviceItem?.taxPercent) || 0;
-      if (gstRate === 0 && itemTax > 0 && itemTaxable > 0) {
-        gstRate = Math.round((itemTax / itemTaxable) * 10000) / 100;
-      }
+      const { itemTax, itemTaxable, gstRate } = getItemTaxDetails(it);
       const existing = taxBreakdownMap.get(gstRate) || { rate: gstRate, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
       existing.taxable += itemTaxable;
-      const effectiveTax = itemTax > 0 ? itemTax : (itemTaxable * gstRate) / 100;
       if (isIntraState) {
-        existing.cgst += effectiveTax / 2;
-        existing.sgst += effectiveTax / 2;
+        existing.cgst += itemTax / 2;
+        existing.sgst += itemTax / 2;
       } else {
-        existing.igst += effectiveTax;
+        existing.igst += itemTax;
       }
       taxBreakdownMap.set(gstRate, existing);
     });
@@ -415,12 +425,13 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
         doc.setFillColor('#2D6AA1'); doc.rect(col, y - 4, W - margin * 2, 8, 'F');
         doc.setFontSize(7.5); doc.setFont('helvetica', 'bold'); doc.setTextColor('#ffffff');
         doc.text('S.No', col + 2, y + 1);
-        doc.text('DESCRIPTION OF GOODS', col + 12, y + 1);
-        doc.text('HSN', col + 80, y + 1, { align: 'center' });
-        if (showTaxColumns) doc.text('GST %', col + 98, y + 1, { align: 'center' });
-        doc.text('QTY', col + 118, y + 1, { align: 'center' });
-        doc.text('RATE', col + 140, y + 1, { align: 'right' });
-        if (showMrpColumn) doc.text('MRP', col + 158, y + 1, { align: 'right' });
+        doc.text('DESCRIPTION OF GOODS', col + 10, y + 1);
+        doc.text('HSN', col + 68, y + 1, { align: 'center' });
+        if (showTaxColumns) doc.text('GST %', col + 84, y + 1, { align: 'center' });
+        doc.text('QTY', col + 102, y + 1, { align: 'center' });
+        doc.text('RATE', col + 122, y + 1, { align: 'right' });
+        if (showTaxColumns) doc.text('GST AMT', col + 142, y + 1, { align: 'right' });
+        if (showMrpColumn) doc.text('MRP', col + 159, y + 1, { align: 'right' });
         doc.text(`AMT (${pdfCurr})`, W - margin - 2, y + 1, { align: 'right' });
         y += 7;
       };
@@ -436,39 +447,37 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
         const displayName = item.isService
           ? (item.itemName || item.serviceItem?.name || '')
           : `${item.product?.name || ''}${item.product?.code ? ` (${item.product.code})` : ''}`;
-        const splitName = doc.splitTextToSize(displayName, 62);
+        const splitName = doc.splitTextToSize(displayName, 50);
         const rowH = Math.max(lineH + 1, splitName.length * 4 + 2);
         if (idx % 2 === 0) { doc.setFillColor('#f8fafc'); doc.rect(col, y - 4, W - margin * 2, rowH, 'F'); }
 
-        const itemAmt = Number(item.amount || item.total || 0);
-        const itemTax = Number(item.tax || 0);
-        const itemTaxable = amountIsPreTax ? itemAmt : Math.max(0, itemAmt - itemTax);
-        let gstRate = Number(!item.isService ? item.product?.taxPercent : item.serviceItem?.taxPercent) || 0;
-        if (gstRate === 0 && itemTax > 0 && itemTaxable > 0) gstRate = Math.round((itemTax / itemTaxable) * 100);
+        const { itemAmt, itemTax, gstRate } = getItemTaxDetails(item);
         const mrpVal = Number(!item.isService ? item.product?.mrp : 0) || 0;
 
         doc.setFontSize(8); doc.setTextColor('#1e293b');
         doc.setFont('helvetica', 'normal'); doc.text(String(idx + 1), col + 4, y, { align: 'center' });
-        doc.setFont('helvetica', 'bold'); doc.text(splitName, col + 12, y);
+        doc.setFont('helvetica', 'bold'); doc.text(splitName, col + 10, y);
         doc.setFont('helvetica', 'normal');
-        doc.text(!item.isService && item.product?.hsnCode ? String(item.product.hsnCode) : '-', col + 80, y, { align: 'center' });
-        if (showTaxColumns) doc.text(`${gstRate}%`, col + 98, y, { align: 'center' });
-        doc.text(`${Number(item.quantity || 0)} ${item.isService ? 'Svc' : (item.product?.unit?.shortCode || 'Nos')}`, col + 118, y, { align: 'center' });
-        doc.text(Number(item.rate || 0).toFixed(2), col + 140, y, { align: 'right' });
-        if (showMrpColumn) doc.text(mrpVal > 0 ? mrpVal.toFixed(2) : '-', col + 158, y, { align: 'right' });
+        doc.text(!item.isService && item.product?.hsnCode ? String(item.product.hsnCode) : '-', col + 68, y, { align: 'center' });
+        if (showTaxColumns) doc.text(`${gstRate}%`, col + 84, y, { align: 'center' });
+        doc.text(`${Number(item.quantity || 0)} ${item.isService ? 'Svc' : (item.product?.unit?.shortCode || 'Nos')}`, col + 102, y, { align: 'center' });
+        doc.text(Number(item.rate || 0).toFixed(2), col + 122, y, { align: 'right' });
+        if (showTaxColumns) doc.text(itemTax.toFixed(2), col + 142, y, { align: 'right' });
+        if (showMrpColumn) doc.text(mrpVal > 0 ? mrpVal.toFixed(2) : '-', col + 159, y, { align: 'right' });
         doc.setFont('helvetica', 'bold');
         doc.text(itemAmt.toFixed(2), W - margin - 2, y, { align: 'right' });
         y += rowH;
       });
 
-      // Table Total Row (Total Qty + Total Amount)
+      // Table Total Row (Total Qty + Total GST + Total Amount)
       doc.setFillColor('#F0F5FA'); doc.rect(col, y - 3.5, W - margin * 2, 7, 'F');
       doc.setDrawColor('#1A63A8'); doc.setLineWidth(0.3);
       doc.line(col, y - 3.5, W - margin, y - 3.5);
       doc.line(col, y + 3.5, W - margin, y + 3.5);
-      doc.setFontSize(8.5); doc.setFont('helvetica', 'bold'); doc.setTextColor('#04325E');
-      doc.text('Total', col + 12, y + 1);
-      doc.text(Number(totalQty).toFixed(2), col + 118, y + 1, { align: 'center' });
+      doc.setFontSize(8.5); doc.setFont('helvetica', 'bold'); doc.setTextColor('#000000');
+      doc.text('Total', col + 10, y + 1);
+      doc.text(Number(totalQty).toFixed(2), col + 102, y + 1, { align: 'center' });
+      if (showTaxColumns) doc.text(totalItemsTax.toFixed(2), col + 142, y + 1, { align: 'right' });
       doc.text(`${pdfCurr} ${itemsAmountSum.toFixed(2)}`, W - margin - 2, y + 1, { align: 'right' });
       y += 9;
 
@@ -1111,6 +1120,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
               {showTaxColumns && <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-center`}>GST %</th>}
               <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-center`}>Qty</th>
               <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-right`}>Rate</th>
+              {showTaxColumns && <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-right`}>GST Amt</th>}
               {showMrpColumn && <th className={`py-2 px-1 sm:py-2.5 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} font-bold text-right`}>MRP</th>}
               <th className={`py-2 px-1.5 sm:py-2.5 sm:px-2.5 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-2'} font-bold text-right`}>Amount</th>
             </tr>
@@ -1120,13 +1130,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
               const displayName = item.isService 
                 ? (item.itemName || item.serviceItem?.name || '')
                 : (item.product?.name || '');
-              const itemAmt = Number(item.amount || item.total || 0);
-              const itemTax = Number(item.tax || 0);
-              const itemTaxable = amountIsPreTax ? itemAmt : Math.max(0, itemAmt - itemTax);
-              let gstRate = Number(!item.isService ? item.product?.taxPercent : item.serviceItem?.taxPercent) || 0;
-              if (gstRate === 0 && itemTax > 0 && itemTaxable > 0) {
-                gstRate = Math.round((itemTax / itemTaxable) * 100);
-              }
+              const { itemAmt, itemTax, gstRate } = getItemTaxDetails(item);
               const mrpVal = Number(!item.isService ? item.product?.mrp : 0) || 0;
               return (
                 <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
@@ -1140,13 +1144,16 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
                   <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-600`}>{!item.isService ? (item.product?.hsnCode || '-') : '-'}</td>
                   {showTaxColumns && (
                     <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-600 whitespace-nowrap`}>
-                      {gstRate > 0 ? `GST ${gstRate}%` : '0%'}
+                      {gstRate > 0 ? `GST ${Math.round(gstRate * 100) / 100}%` : '0%'}
                     </td>
                   )}
                   <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-700 font-medium whitespace-nowrap`}>
                     {Number(item.quantity || 0)} {item.isService ? 'Svc' : (item.product?.unit?.shortCode || 'Nos')}
                   </td>
                   <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-right text-slate-700 whitespace-nowrap`}>{Number(item.rate || 0).toFixed(2)}</td>
+                  {showTaxColumns && (
+                    <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-right text-slate-700 whitespace-nowrap`}>{itemTax.toFixed(2)}</td>
+                  )}
                   {showMrpColumn && (
                     <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-right text-slate-500 whitespace-nowrap`}>
                       {mrpVal > 0 ? mrpVal.toFixed(2) : '-'}
@@ -1158,13 +1165,14 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
             })}
           </tbody>
           <tfoot>
-            <tr className={`bg-[#F0F5FA] border-t-2 border-[#1A63A8] text-[#04325E] font-bold ${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[8.5px] sm:text-[10.5px] print:text-[9.5px]'}`}>
+            <tr className={`bg-[#F0F5FA] border-t-2 border-[#1A63A8] text-black font-bold ${isA5 ? 'text-[8px] print:text-[7.5px]' : 'text-[8.5px] sm:text-[10.5px] print:text-[9.5px]'}`} style={{ color: '#000000' }}>
               <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-center`}></td>
               <td className={`py-1.5 px-1.5 sm:py-2 sm:px-2.5 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-2'} uppercase tracking-wide`}>Total</td>
               <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>
               {showTaxColumns && <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>}
               <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-center whitespace-nowrap`}>{Number(totalQty).toFixed(2)}</td>
               <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>
+              {showTaxColumns && <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-right whitespace-nowrap`}>{totalItemsTax.toFixed(2)}</td>}
               {showMrpColumn && <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>}
               <td className={`py-1.5 px-1.5 sm:py-2 sm:px-2.5 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-2'} text-right whitespace-nowrap`}>{currency} {itemsAmountSum.toFixed(2)}</td>
             </tr>
@@ -1315,7 +1323,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
               ))}
             </tbody>
             <tfoot>
-              <tr className={`bg-[#F0F5FA] border-t border-[#1A63A8] text-[#04325E] font-bold ${isA5 ? 'text-[7.5px] print:text-[7px]' : 'text-[8px] sm:text-[10px] print:text-[9px]'}`}>
+              <tr className={`bg-[#F0F5FA] border-t border-[#1A63A8] text-black font-bold ${isA5 ? 'text-[7.5px] print:text-[7px]' : 'text-[8px] sm:text-[10px] print:text-[9px]'}`} style={{ color: '#000000' }}>
                 <td className="py-1.5 px-2 print:py-1 print:px-1.5 text-left">Total</td>
                 <td className="py-1.5 px-2 print:py-1 print:px-1.5 text-right">{taxBreakdownRows.reduce((s, r) => s + r.taxable, 0).toFixed(2)}</td>
                 <td className="py-1.5 px-1.5 print:py-1 print:px-1"></td>
@@ -1417,7 +1425,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
         <style>{`
           .invoice-print-sheet table tfoot td,
           .invoice-print-sheet table tfoot th {
-            color: #04325E !important;
+            color: #000000 !important;
           }
           @media print {
             @page {
