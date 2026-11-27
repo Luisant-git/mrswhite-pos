@@ -46,7 +46,6 @@ export const shareOrDownloadFile = async ({
   blob,
   fileName,
   title,
-  text,
 }: ShareOrDownloadOptions): Promise<'shared' | 'downloaded' | 'aborted'> => {
   const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
 
