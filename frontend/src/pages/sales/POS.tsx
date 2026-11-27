@@ -105,6 +105,7 @@ const saleSchema = z.object({
 type SaleFormValues = z.infer<typeof saleSchema>;
 
 const DRAFTS_KEY = 'pos_drafts';
+const AUTO_DRAFT_KEY = 'pos_auto_draft';
 const getDrafts = (): any[] => {
   try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '[]'); } catch (e) { return []; }
 };
@@ -155,6 +156,10 @@ const POS = () => {
   const [selectedDraft, setSelectedDraft] = useState<any>(null);
   const [activeDraftInfo, setActiveDraftInfo] = useState<{ id: string; customerName: string } | null>(null);
   const activeDraftIdRef = useRef<string | null>(null);
+  const [autoDraft, setAutoDraft] = useState<any>(null);
+  const [lastAutoSavedAt, setLastAutoSavedAt] = useState<Date | null>(null);
+  const isRestoringDraftRef = useRef(false);
+  const autoSaveTimerRef = useRef<any>(null);
   const editPrefilledRef = useRef<string | null>(null);
   const editPrefilledWithProductsRef = useRef(false);
 
@@ -454,7 +459,7 @@ const POS = () => {
     setValue('tax', Number(totalTax.toFixed(2)));
     setValue('netAmount', Number(netAmount.toFixed(2)));
 
-  }, [JSON.stringify(items), watchTotalDiscount, watchFreightCharges, watchRoundOff, setValue, settings?.enableTax, products]);
+  }, [JSON.stringify(items), watchTotalDiscount, watchFreightCharges, watchRoundOff, setValue, settings?.enableTax, settings?.taxType, products]);
 
   // Product change handler
   const handleProductChange = async (index: number, id: string) => {
@@ -581,6 +586,9 @@ const POS = () => {
         }
 
         reset(freshFormValues());
+        localStorage.removeItem(AUTO_DRAFT_KEY);
+        setAutoDraft(null);
+        setLastAutoSavedAt(null);
 
         // Remove the loaded draft after successful save
         if (activeDraftIdRef.current) {
@@ -761,6 +769,9 @@ const POS = () => {
     persistDrafts(next);
     activeDraftIdRef.current = null;
     setActiveDraftInfo(null);
+    localStorage.removeItem(AUTO_DRAFT_KEY);
+    setAutoDraft(null);
+    setLastAutoSavedAt(null);
     // Clear the entry form so the next customer starts fresh
     reset(freshFormValues());
     setValue('customerId', 0);
@@ -825,6 +836,46 @@ const POS = () => {
     toast.success('Draft deleted.');
   };
 
+  const handleRestoreAutoDraft = () => {
+    if (!autoDraft) return;
+    isRestoringDraftRef.current = true;
+    const data = autoDraft.data || autoDraft;
+    const currentInvoice = getValues('invoiceNo');
+    const loadedItems = (data.items || []).map((item: any) => {
+      const product = products.find((p: any) => p.id === Number(item.productId));
+      return {
+        ...item,
+        productId: Number(item.productId) || 0,
+        stock: product?.currentStock ?? item.stock ?? (item.isService ? 999999 : 0),
+        unit: product?.unit?.shortCode || product?.unit?.name || item.unit || (item.isService ? 'Svc' : 'Nos'),
+      };
+    });
+    const finalItems = loadedItems.length ? loadedItems : freshFormValues().items;
+    reset({
+      ...data,
+      invoiceNo: currentInvoice && currentInvoice !== 'Generating...' ? currentInvoice : (data.invoiceNo || 'Generating...'),
+      items: finalItems,
+    }, { keepDefaultValues: true });
+    setValue('customerId', Number(data.customerId) || 0, { shouldValidate: true, shouldDirty: true });
+    setValue('paymentModeId', Number(data.paymentModeId) || 0, { shouldValidate: true, shouldDirty: true });
+    setValue('rateType', data.rateType || 'Retail Rate', { shouldValidate: true, shouldDirty: true });
+    setValue('items', finalItems, { shouldValidate: true, shouldDirty: true });
+    setCustomerPaid('');
+    setAutoDraft(null);
+    setLastAutoSavedAt(new Date(autoDraft.savedAt));
+    toast.success('Unsaved draft restored successfully!');
+    setTimeout(() => {
+      isRestoringDraftRef.current = false;
+    }, 500);
+  };
+
+  const handleDiscardAutoDraft = () => {
+    localStorage.removeItem(AUTO_DRAFT_KEY);
+    setAutoDraft(null);
+    setLastAutoSavedAt(null);
+    toast.success('Unsaved draft discarded.');
+  };
+
   const handleClear = () => {
     if (editId) return;
     // Keep the already-generated entry number, otherwise the form would stay on "Generating..."
@@ -836,9 +887,94 @@ const POS = () => {
     setValue('customerId', 0);
     setValue('items', freshFormValues().items);
     setCustomerPaid('');
+    localStorage.removeItem(AUTO_DRAFT_KEY);
+    setAutoDraft(null);
+    setLastAutoSavedAt(null);
     activeDraftIdRef.current = null;
     setActiveDraftInfo(null);
   };
+
+  // Check for auto-draft on mount
+  useEffect(() => {
+    if (editId || estimationId) return;
+    try {
+      const raw = localStorage.getItem(AUTO_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const hasData =
+          (parsed.data?.items && parsed.data.items.some((i: any) => Number(i.productId) > 0 || i.serviceItemId)) ||
+          Number(parsed.customerId) > 0;
+        if (hasData) {
+          setAutoDraft(parsed);
+        } else {
+          localStorage.removeItem(AUTO_DRAFT_KEY);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to read POS auto draft', e);
+    }
+  }, [editId, estimationId]);
+
+  // Auto-save draft on form changes (debounced 400ms)
+  useEffect(() => {
+    if (editId) return;
+    const subscription = watch((values) => {
+      if (isRestoringDraftRef.current) return;
+      const validItems = (values.items || []).filter((i: any) => Number(i?.productId) > 0 || i?.serviceItemId);
+      const hasCustomer = Number(values.customerId) > 0;
+      if (validItems.length === 0 && !hasCustomer) {
+        return;
+      }
+
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = setTimeout(() => {
+        try {
+          const customer = customers.find((c: any) => c.id === Number(values.customerId));
+          const customerName = customer?.name || (Number(values.customerId) ? `Customer #${values.customerId}` : 'Counter / Cash Sale');
+          const draftPayload = {
+            savedAt: new Date().toISOString(),
+            customerId: values.customerId,
+            customerName,
+            invoiceNo: values.invoiceNo,
+            itemCount: validItems.length,
+            qtyCount: validItems.reduce((s: number, it: any) => s + (Number(it?.quantity) || 0), 0),
+            netAmount: Number(values.netAmount) || 0,
+            data: {
+              ...values,
+              customerId: Number(values.customerId) || 0,
+              paymentModeId: Number(values.paymentModeId) || 0,
+              rateType: values.rateType || 'Retail Rate',
+            }
+          };
+          localStorage.setItem(AUTO_DRAFT_KEY, JSON.stringify(draftPayload));
+          setLastAutoSavedAt(new Date());
+        } catch (e) {
+          console.error('Failed to auto-save POS draft', e);
+        }
+      }, 400);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [watch, editId, customers]);
+
+  // Warn on page refresh/close if unsaved changes exist
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (editId) return;
+      const values = getValues();
+      const hasItems = (values.items || []).some((i: any) => Number(i.productId) > 0 || i.serviceItemId);
+      const hasCustomer = Number(values.customerId) > 0;
+      if (hasItems || hasCustomer) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [getValues, editId]);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -1063,6 +1199,16 @@ const POS = () => {
             >
               <Printer size={16} /> <span className="hidden sm:inline">{editId ? 'UPDATE & PRINT' : 'SAVE & PRINT'} (F10)</span><span className="sm:hidden">{editId ? 'Update' : 'Save'}</span>
             </button>
+            {editId && (
+              <button
+                type="button"
+                onClick={() => navigate('/sales')}
+                className="bg-slate-600 hover:bg-slate-700 text-white px-3 sm:px-4 py-2 sm:py-1.5 rounded flex items-center gap-1.5 font-bold text-[13px] transition-colors"
+                title="Cancel Editing"
+              >
+                <X size={16} /> <span className="hidden sm:inline">Cancel</span>
+              </button>
+            )}
             {!editId && (
               <>
                 <button
@@ -1085,14 +1231,57 @@ const POS = () => {
               </>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setIsLeaveModalOpen(true)}
-            className="bg-[#EF4444] hover:bg-[#DC2626] text-white px-3 sm:px-4 py-2 sm:py-1.5 rounded flex items-center gap-2 font-bold text-[13px] transition-colors"
-          >
-            <X size={16} /> <span className="hidden sm:inline">Close (Esc)</span>
-          </button>
+          <div className="flex items-center gap-3">
+            {lastAutoSavedAt && !editId && (
+              <span className="text-[11px] font-semibold text-emerald-300 flex items-center gap-1.5 bg-emerald-950/40 border border-emerald-500/30 px-2.5 py-1 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                Auto-saved {lastAutoSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsLeaveModalOpen(true)}
+              className="bg-[#EF4444] hover:bg-[#DC2626] text-white px-3 sm:px-4 py-2 sm:py-1.5 rounded flex items-center gap-2 font-bold text-[13px] transition-colors"
+            >
+              <X size={16} /> <span className="hidden sm:inline">Close (Esc)</span>
+            </button>
+          </div>
         </div>
+
+        {/* Auto-Draft Notification Banner */}
+        {autoDraft && !editId && (
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-300 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-xs z-20 print:hidden">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="p-1.5 bg-amber-100 text-amber-700 rounded-lg shrink-0">
+                <Clock size={16} />
+              </div>
+              <div className="text-xs text-amber-950 min-w-0">
+                <p className="font-bold">
+                  Unsaved Sale Draft Recovered · <span className="font-normal text-amber-800">Auto-saved {new Date(autoDraft.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </p>
+                <p className="text-amber-800 text-[11px] truncate">
+                  Customer: <strong>{autoDraft.customerName || 'Counter / Cash Sale'}</strong> · {autoDraft.itemCount || 0} items ({autoDraft.qtyCount || 0} qty) · Net: <strong>{formatCurrency(autoDraft.netAmount || 0)}</strong>
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleRestoreAutoDraft}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs px-3 py-1.5 rounded-md shadow-sm transition-colors flex items-center gap-1.5"
+              >
+                <RefreshCw size={13} /> Restore Draft
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardAutoDraft}
+                className="bg-white hover:bg-gray-100 text-gray-700 border border-gray-300 font-bold text-xs px-2.5 py-1.5 rounded-md shadow-sm transition-colors"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        )}
 
         {editId && (
           <div className="bg-amber-100 border-b border-amber-300 text-amber-800 px-4 py-1.5 text-[12px] font-bold flex items-center gap-2 shrink-0 print:hidden">
@@ -1768,6 +1957,17 @@ const POS = () => {
                   </button>
                 </>
               )}
+              {editId && (
+                <button
+                  type="button"
+                  onClick={() => navigate('/sales')}
+                  className="flex items-center gap-1 bg-slate-600 hover:bg-slate-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-all"
+                  title="Cancel Editing"
+                >
+                  <X size={14} />
+                  <span>Cancel</span>
+                </button>
+              )}
               <button
                 type="button"
                 disabled={createMutation.isPending}
@@ -1775,7 +1975,7 @@ const POS = () => {
                 className="flex items-center gap-1 bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] disabled:opacity-50 text-white px-2.5 py-1.5 rounded-lg text-xs font-extrabold shadow-sm transition-all"
               >
                 <CheckCircle size={14} />
-                <span>{createMutation.isPending ? 'SAVING...' : 'SAVE'}</span>
+                <span>{createMutation.isPending ? 'SAVING...' : editId ? 'UPDATE' : 'SAVE'}</span>
               </button>
               <button
                 type="button"
@@ -1788,6 +1988,32 @@ const POS = () => {
             </div>
           </div>
         </div>
+
+        {/* Mobile Auto-Draft Banner */}
+        {autoDraft && !editId && (
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-300 px-3 py-2 flex items-center justify-between gap-2 shrink-0 shadow-xs z-20">
+            <div className="text-xs text-amber-950 min-w-0">
+              <p className="font-bold truncate">Draft: {autoDraft.customerName || 'Cash Sale'}</p>
+              <p className="text-amber-800 text-[10px]">{autoDraft.itemCount || 0} items · {formatCurrency(autoDraft.netAmount || 0)}</p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleRestoreAutoDraft}
+                className="bg-amber-600 text-white font-bold text-[11px] px-2.5 py-1 rounded shadow-sm"
+              >
+                Restore
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardAutoDraft}
+                className="bg-white text-gray-700 border border-gray-300 font-bold text-[11px] px-2 py-1 rounded"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        )}
 
         {activeDraftInfo && !editId && (
           <div className="bg-purple-100 border-b border-purple-300 text-purple-900 px-3 py-1.5 text-xs font-bold flex items-center justify-between shrink-0">
