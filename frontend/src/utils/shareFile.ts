@@ -59,7 +59,6 @@ export const shareOrDownloadFile = async ({
         await navigator.share({
           files: [file],
           title,
-          ...(text ? { text } : {}),
         });
         return 'shared';
       } catch (err: any) {
@@ -68,7 +67,8 @@ export const shareOrDownloadFile = async ({
         }
         console.warn('Native share unavailable or failed, downloading instead:', err);
         downloadBlobFile(blob, fileName);
-        toast.success(`${fileName} downloaded (native share unavailable)`);
+        const reason = err?.name ? `${err.name}${err?.message ? `: ${String(err.message).slice(0, 60)}` : ''}` : 'native share unavailable';
+        toast.success(`${fileName} downloaded (${reason})`);
         return 'downloaded';
       }
     }
@@ -76,9 +76,9 @@ export const shareOrDownloadFile = async ({
 
   downloadBlobFile(blob, fileName);
   if (typeof window !== 'undefined' && !window.isSecureContext) {
-    toast.success(`${fileName} downloaded (native share requires HTTPS or localhost)`);
+    toast.success(`${fileName} downloaded (Windows native share requires HTTPS or localhost)`);
   } else {
-    toast.success(`${fileName} downloaded`);
+    toast.success(`${fileName} downloaded (browser does not support file sharing here)`);
   }
   return 'downloaded';
 };

@@ -120,6 +120,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   const [isSharingQR, setIsSharingQR] = useState(false);
   const [isDownloadingQR, setIsDownloadingQR] = useState(false);
   const preloadedLogoRef = useRef<{ src: string; dataUrl: string; width: number; height: number } | null>(null);
+  const failedLogoSrcRef = useRef<string | null>(null);
   const [printFormat, setPrintFormat] = useState<'a4' | 'a5' | 'thermal'>(
     () => {
       const saved = (localStorage.getItem('invoicePrintFormat') || 'a4').toLowerCase();
@@ -170,15 +171,20 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
 
   useEffect(() => {
     if (!isOpen || !settings?.logoImage) {
-      if (!settings?.logoImage) preloadedLogoRef.current = null;
+      if (!settings?.logoImage) {
+        preloadedLogoRef.current = null;
+        failedLogoSrcRef.current = null;
+      }
       return;
     }
     const logoSrc = settings.logoImage;
-    if (preloadedLogoRef.current?.src === logoSrc) return;
+    if (preloadedLogoRef.current?.src === logoSrc || failedLogoSrcRef.current === logoSrc) return;
 
     let cancelled = false;
     const img = new Image();
-    img.crossOrigin = 'Anonymous';
+    if (!logoSrc.startsWith('data:')) {
+      img.crossOrigin = 'Anonymous';
+    }
     img.onload = () => {
       if (cancelled) return;
       try {
@@ -192,12 +198,17 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
           width: cv.width,
           height: cv.height,
         };
+        failedLogoSrcRef.current = null;
       } catch {
         preloadedLogoRef.current = null;
+        failedLogoSrcRef.current = logoSrc;
       }
     };
     img.onerror = () => {
-      if (!cancelled) preloadedLogoRef.current = null;
+      if (!cancelled) {
+        preloadedLogoRef.current = null;
+        failedLogoSrcRef.current = logoSrc;
+      }
     };
     img.src = logoSrc;
     return () => {
@@ -327,7 +338,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
         doc.text(t || '', x, yPos, textOpts);
       };
 
-      // Logo (use preloaded data URL synchronously to preserve Windows Share user gesture)
+      // Logo (use preloaded data URL synchronously so Windows Share keeps its user gesture)
       if (settings?.logoImage) {
         const maxW = 50, maxH = 20;
         const cached = preloadedLogoRef.current?.src === settings.logoImage ? preloadedLogoRef.current : null;
@@ -339,12 +350,11 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
             doc.addImage(cached.dataUrl, 'PNG', col, y, lw, lh);
             y += lh + 4;
           } catch { /* skip */ }
-        } else {
+        } else if (failedLogoSrcRef.current !== settings.logoImage && settings.logoImage.startsWith('data:')) {
           try {
             const logoImg = await new Promise<HTMLImageElement>((resolve, reject) => {
               const img = new Image();
-              img.crossOrigin = 'Anonymous';
-              const timer = window.setTimeout(() => reject(new Error('Logo load timeout')), 1500);
+              const timer = window.setTimeout(() => reject(new Error('Logo load timeout')), 500);
               img.onload = () => { window.clearTimeout(timer); resolve(img); };
               img.onerror = (e) => { window.clearTimeout(timer); reject(e); };
               img.src = settings.logoImage!;
