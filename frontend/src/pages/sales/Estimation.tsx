@@ -75,13 +75,6 @@ const estimationItemSchema = z.object({
         path: ["rate"]
       });
     }
-    if (data.quantity > data.stock) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Qty > Stock",
-        path: ["quantity"]
-      });
-    }
   }
 });
 
@@ -403,17 +396,6 @@ const Estimation = () => {
       }))
     };
 
-    const hasLowRate = validItems.some((item: any) => {
-      const p = products.find((prod: any) => prod.id === Number(item.productId));
-      return p && Number(item.rate) > 0 && Number(item.rate) <= Number(p.purchaseRate);
-    });
-
-    if (hasLowRate) {
-      setPendingPayload(payload);
-      setShowLossWarning(true);
-      return;
-    }
-
     setPendingSavePayload(payload);
     setIsSaveModalOpen(true);
   };
@@ -445,10 +427,6 @@ const Estimation = () => {
       errorMessage = 'Please select a Payment Mode before saving.';
     } else if (errors.items && Array.isArray(errors.items)) {
       for (const item of errors.items) {
-        if (item?.quantity?.message === 'Qty > Stock') {
-          errorMessage = 'Validation failed: Quantity exceeds available stock.';
-          break;
-        }
         if (item?.quantity?.message === 'Quantity must be > 0') {
           errorMessage = 'Validation failed: Quantity must be greater than 0.';
           break;
@@ -546,10 +524,6 @@ const Estimation = () => {
     if (existingIdx >= 0) {
       const curQty = Number(currentItems[existingIdx].quantity) || 0;
       const newQty = curQty + 1;
-      if (newQty > (product.currentStock || 0)) {
-        toast.error(`Cannot exceed stock (${product.currentStock})`);
-        return;
-      }
       setValue(`items.${existingIdx}.quantity`, newQty, { shouldValidate: true });
       const rate = Number(currentItems[existingIdx].rate) || 0;
       const discAmt = Number(currentItems[existingIdx].discAmt) || 0;
@@ -913,7 +887,7 @@ const Estimation = () => {
                       type="number" min="1" placeholder="0"
                       onFocus={(e) => e.target.select()}
                       onKeyDown={(e) => handleCellKey(e, index, 1, 5)}
-                      className={`w-full px-2 py-1 border rounded text-[13px] outline-none text-center transition-colors ${watch(`items.${index}.quantity`) > watch(`items.${index}.stock`) ? 'border-red-500 focus:border-red-500 bg-red-100 text-red-700 font-bold' : 'border-[#D1D5DB] focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50'}`}
+                      className="w-full px-2 py-1 border border-[#D1D5DB] focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 rounded text-[13px] outline-none text-center transition-colors"
                     />
                   </td>
                   <td data-label="Rate" className="px-2 py-1 border-r border-[#E5E7EB]">
@@ -923,24 +897,7 @@ const Estimation = () => {
                       type="number" step="0.01" placeholder="0.00"
                       onFocus={(e) => e.target.select()}
                       onKeyDown={(e) => handleCellKey(e, index, 2, 5)}
-                      className={`w-full px-2 py-1 border rounded text-[13px] outline-none text-right font-bold transition-colors ${(() => {
-                        const pId = watch(`items.${index}.productId`);
-                        const prod = products.find((p: any) => p.id === Number(pId));
-                        const currentRate = Number(watch(`items.${index}.rate`)) || 0;
-                        if (prod && currentRate > 0 && currentRate <= Number(prod.purchaseRate)) {
-                          return 'border-red-500 focus:border-red-500 focus:ring-1 focus:ring-red-500 bg-red-100 text-red-700';
-                        }
-                        return 'border-[#CBD5E1] bg-white focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 text-[#1E293B]';
-                      })()}`}
-                      onBlur={(e) => {
-                        const enteredRate = Number(e.target.value);
-                        const pId = watch(`items.${index}.productId`);
-                        const product = products.find((p: any) => p.id === Number(pId));
-                        if (product && enteredRate > 0 && enteredRate <= Number(product.purchaseRate)) {
-                          toast.error(`Loss Warning: Selling below purchase rate (${formatCurrency(product.purchaseRate)})!`, { duration: 4000 });
-                        }
-                        register(`items.${index}.rate`).onBlur(e);
-                      }}
+                      className="w-full px-2 py-1 border border-[#CBD5E1] bg-white focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 rounded text-[13px] outline-none text-right font-bold text-[#1E293B] transition-colors"
                     />
                   </td>
                   <td data-label="Disc %" className="px-2 py-1 border-r border-[#E5E7EB]">
@@ -1212,30 +1169,22 @@ const Estimation = () => {
           ) : (
             filteredMobileProducts.map((item: any) => {
               const inCart = validMobileCartItems.find((c: any) => Number(c.productId) === Number(item.id));
-              const outOfStock = Number(item.currentStock) <= 0;
+              const isLowStock = Number(item.currentStock) <= 0;
               const rate = Number(item.sellingRate) || 0;
 
               return (
                 <div
                   key={item.id}
-                  onClick={() => !outOfStock && handleMobileAddToCart(item)}
-                  className={`bg-white rounded-xl p-3.5 border border-slate-200 shadow-sm flex items-center justify-between transition-all select-none ${
-                    outOfStock ? 'opacity-50 cursor-not-allowed' : 'active:scale-[0.99] cursor-pointer hover:border-indigo-300'
-                  }`}
+                  onClick={() => handleMobileAddToCart(item)}
+                  className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-sm flex items-center justify-between active:scale-[0.99] cursor-pointer hover:border-indigo-300 transition-all select-none"
                 >
                   <div className="flex-1 min-w-0 pr-3">
                     <p className="font-bold text-slate-800 text-sm leading-snug line-clamp-1">{item.name}</p>
                     <p className="text-[11px] text-slate-400 font-semibold tracking-wide mt-0.5">{item.code}</p>
                     <div className="mt-1 flex items-center gap-1.5">
-                      {outOfStock ? (
-                        <span className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          Out of Stock
-                        </span>
-                      ) : (
-                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          Stock: {item.currentStock}
-                        </span>
-                      )}
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isLowStock ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-800'}`}>
+                        Stock: {item.currentStock}
+                      </span>
                     </div>
                   </div>
 
@@ -1249,11 +1198,9 @@ const Estimation = () => {
                         <span>{inCart.quantity}</span>
                       </div>
                     ) : (
-                      <div className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold text-white shadow-sm ${
-                        outOfStock ? 'bg-slate-400' : 'bg-[#312E81]'
-                      }`}>
+                      <div className="flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold text-white shadow-sm bg-[#312E81]">
                         <Plus size={13} />
-                        <span>{outOfStock ? 'OOS' : 'Add'}</span>
+                        <span>Add</span>
                       </div>
                     )}
                   </div>

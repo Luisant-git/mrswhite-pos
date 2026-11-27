@@ -29,35 +29,7 @@ export class PurchaseReturnsService {
         include: { items: true }
       });
 
-      // 2. Adjust Stock (deduct for purchase return)
-      for (const item of createPurchaseReturnDto.items) {
-        if (item.returnQty > 0) {
-          const product = await tx.product.findUnique({ where: { id: item.productId } });
-          if (!product) throw new BadRequestException(`Product not found: ${item.productId}`);
-          if (Number(product.currentStock) < item.returnQty) {
-            throw new BadRequestException(`Insufficient stock for product ${product.name}`);
-          }
-          
-          await tx.product.update({
-            where: { id: item.productId },
-            data: { currentStock: { decrement: item.returnQty } }
-          });
-          
-          await tx.stockTransaction.create({
-            data: {
-              date: new Date(createPurchaseReturnDto.date),
-              productId: item.productId,
-              type: 'PURCHASE_RETURN',
-              quantityOut: item.returnQty,
-              balance: Number(product.currentStock) - item.returnQty,
-              reference: createPurchaseReturnDto.returnNo
-            }
-          });
-        }
-      }
-
-      // 3. Optional: Adjust Supplier balance if needed (e.g. decrease openingBalance or store credit, but keeping simple for now)
-
+      // Purchase returns adjust supplier payable balances only (no finished-goods stock checks or deductions)
       return purchaseReturn;
     });
   }

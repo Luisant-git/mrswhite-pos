@@ -45,13 +45,6 @@ const purchaseItemSchema = z.object({
         path: ["quantity"]
       });
     }
-    if (data.pRate < 0.01) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Purchase Rate is required",
-        path: ["pRate"]
-      });
-    }
   }
 });
 
@@ -312,10 +305,9 @@ const PurchaseEntry = () => {
     const product = products.find((p: any) => p.id === Number(productId));
     if (product) {
       setValue(`items.${index}.unit`, product.unit?.shortCode || product.unit?.name || 'Nos');
-      setValue(`items.${index}.pRate`, Number(product.purchaseRate) || 0);
-      setValue(`items.${index}.wRate`, Number(product.wholesaleRate) || 0);
-      setValue(`items.${index}.sRate`, Number(product.sellingRate) || 0);
-      setValue(`items.${index}.mrp`, Number(product.mrp) || 0);
+      setValue(`items.${index}.wRate`, 0);
+      setValue(`items.${index}.sRate`, 0);
+      setValue(`items.${index}.mrp`, 0);
     }
   };
 
@@ -557,23 +549,20 @@ const PurchaseEntry = () => {
       const discAmt = Number(currentItems[existingIdx].discAmt) || 0;
       setValue(`items.${existingIdx}.total`, Number(((newQty * pRate) - discAmt).toFixed(2)), { shouldValidate: true });
     } else {
-      const pRate = Number(product.purchaseRate) || 0;
-      const wRate = Number(product.wholesaleRate) || 0;
-      const sRate = Number(product.sellingRate) || 0;
-      const mrp = Number(product.mrp) || sRate;
+      const pRate = 0;
 
       const newItem = {
         productId: Number(product.id),
         quantity: 1,
         unit: product.unit?.shortCode || product.unit?.name || 'Nos',
         pRate,
-        wRate,
-        sRate,
-        mrp,
+        wRate: 0,
+        sRate: 0,
+        mrp: 0,
         discPercent: 0,
         discAmt: 0,
         tax: 0,
-        total: pRate,
+        total: 0,
       };
 
       if (currentItems.length === 1 && !currentItems[0].productId) {
@@ -815,17 +804,14 @@ const PurchaseEntry = () => {
 
         {/* Items Grid */}
         <div className="entry-table-wrapper flex-1 min-h-0 overflow-auto custom-scrollbar bg-white border-b border-[#E5E7EB]">
-          <table className="w-full border-collapse border border-[#E5E7EB] whitespace-nowrap md:min-w-[1200px] responsive-table">
+          <table className="w-full border-collapse border border-[#E5E7EB] whitespace-nowrap md:min-w-[900px] responsive-table">
             <thead>
               <tr className="bg-[#0F172A] text-white">
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-10">#</th>
                 <th className="px-2 py-2 text-left text-[12px] font-bold border border-[#334155]">Item Code / Name</th>
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-20">Qty</th>
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-20">Unit</th>
-                <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-24">PRate</th>
-                <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-24">WRate</th>
-                <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-24">SRate</th>
-                <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-24">MRP</th>
+                <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-28">Rate</th>
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-20">Disc %</th>
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-24">Disc Amt</th>
                 {settings?.enableTax && (
@@ -890,60 +876,30 @@ const PurchaseEntry = () => {
                       data-row={index} data-col={1}
                       type="number" min="1" placeholder="0"
                       onFocus={(e) => e.target.select()}
-                      onKeyDown={(e) => handleCellKey(e, index, 1, 7)}
+                      onKeyDown={(e) => handleCellKey(e, index, 1, 4)}
                       className="w-full px-2 py-1 border border-[#D1D5DB] rounded text-[13px] outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 transition-colors text-center"
                     />
                   </td>
                   <td data-label="Unit" className="px-2 py-1 border-r border-[#E5E7EB]">
                     <input {...register(`items.${index}.unit`)} type="text" readOnly tabIndex={-1} className="w-full px-1 py-1 bg-transparent text-[13px] outline-none text-center" />
                   </td>
-                  <td data-label="PRate" className="px-2 py-1 border-r border-[#E5E7EB]">
+                  <td data-label="Rate" className="px-2 py-1 border-r border-[#E5E7EB]">
                     <input
                       {...register(`items.${index}.pRate`)}
                       data-row={index} data-col={2}
                       type="number" step="0.01" placeholder="0.00"
                       onFocus={(e) => e.target.select()}
-                      onKeyDown={(e) => handleCellKey(e, index, 2, 7)}
-                      className="w-full px-2 py-1 border border-[#D1D5DB] rounded text-[13px] outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 transition-colors text-right"
-                    />
-                  </td>
-                  <td data-label="WRate" className="px-2 py-1 border-r border-[#E5E7EB]">
-                    <input
-                      {...register(`items.${index}.wRate`)}
-                      data-row={index} data-col={3}
-                      type="number" step="0.01" placeholder="0.00"
-                      onFocus={(e) => e.target.select()}
-                      onKeyDown={(e) => handleCellKey(e, index, 3, 7)}
-                      className="w-full px-2 py-1 border border-[#D1D5DB] rounded text-[13px] outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 transition-colors text-right"
-                    />
-                  </td>
-                  <td data-label="SRate" className="px-2 py-1 border-r border-[#E5E7EB]">
-                    <input
-                      {...register(`items.${index}.sRate`)}
-                      data-row={index} data-col={4}
-                      type="number" step="0.01" placeholder="0.00"
-                      onFocus={(e) => e.target.select()}
-                      onKeyDown={(e) => handleCellKey(e, index, 4, 7)}
-                      className="w-full px-2 py-1 border border-[#D1D5DB] rounded text-[13px] outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 transition-colors text-right"
-                    />
-                  </td>
-                  <td data-label="MRP" className="px-2 py-1 border-r border-[#E5E7EB]">
-                    <input
-                      {...register(`items.${index}.mrp`)}
-                      data-row={index} data-col={5}
-                      type="number" step="0.01" placeholder="0.00"
-                      onFocus={(e) => e.target.select()}
-                      onKeyDown={(e) => handleCellKey(e, index, 5, 7)}
+                      onKeyDown={(e) => handleCellKey(e, index, 2, 4)}
                       className="w-full px-2 py-1 border border-[#D1D5DB] rounded text-[13px] outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 transition-colors text-right"
                     />
                   </td>
                   <td data-label="Disc %" className="px-2 py-1 border-r border-[#E5E7EB]">
                     <input
                       {...register(`items.${index}.discPercent`)}
-                      data-row={index} data-col={6}
+                      data-row={index} data-col={3}
                       type="number" step="0.01" placeholder="0"
                       onFocus={(e) => e.target.select()}
-                      onKeyDown={(e) => handleCellKey(e, index, 6, 7)}
+                      onKeyDown={(e) => handleCellKey(e, index, 3, 4)}
                       onChange={(e) => {
                         register(`items.${index}.discPercent`).onChange(e);
                         const pct = Number(e.target.value) || 0;
@@ -958,10 +914,10 @@ const PurchaseEntry = () => {
                   <td data-label="Disc Amt" className="px-2 py-1 border-r border-[#E5E7EB]">
                     <input
                       {...register(`items.${index}.discAmt`)}
-                      data-row={index} data-col={7}
+                      data-row={index} data-col={4}
                       type="number" step="0.01" placeholder="0.00"
                       onFocus={(e) => e.target.select()}
-                      onKeyDown={(e) => handleCellKey(e, index, 7, 7)}
+                      onKeyDown={(e) => handleCellKey(e, index, 4, 4)}
                       onChange={(e) => {
                         register(`items.${index}.discAmt`).onChange(e);
                         const amt = Number(e.target.value) || 0;
@@ -1218,8 +1174,6 @@ const PurchaseEntry = () => {
           ) : (
             filteredMobileProducts.map((item: any) => {
               const inCart = validMobileCartItems.find((c: any) => Number(c.productId) === Number(item.id));
-              const pRate = Number(item.purchaseRate) || 0;
-              const sRate = Number(item.sellingRate) || 0;
 
               return (
                 <div
@@ -1230,17 +1184,6 @@ const PurchaseEntry = () => {
                   <div className="flex-1 min-w-0 pr-3">
                     <p className="font-bold text-slate-800 text-sm leading-snug line-clamp-1">{item.name}</p>
                     <p className="text-[11px] text-slate-400 font-semibold tracking-wide mt-0.5">{item.code}</p>
-                    <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                      <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                        P: {formatCurrency(pRate)}
-                      </span>
-                      <span className="bg-emerald-50 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                        S: {formatCurrency(sRate)}
-                      </span>
-                      <span className="bg-slate-100 text-slate-500 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                        Stk: {item.currentStock || 0}
-                      </span>
-                    </div>
                   </div>
 
                   <div className="shrink-0">
@@ -1331,7 +1274,7 @@ const PurchaseEntry = () => {
                             <div className="flex-1 pr-2">
                               <p className="text-sm font-bold text-slate-800 line-clamp-1">{itemName}</p>
                               <p className="text-xs text-slate-500 mt-0.5">
-                                {itemCode && `${itemCode} · `}P.Rate: {formatCurrency(item.pRate)} · S.Rate: {formatCurrency(item.sRate)}
+                                {itemCode && `${itemCode} · `}Rate: {formatCurrency(item.pRate)}
                                 {discPercent > 0 && ` · Disc: ${discPercent}%`}
                               </p>
                             </div>
@@ -1614,27 +1557,15 @@ const PurchaseEntry = () => {
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-base font-bold text-slate-800 outline-none focus:border-blue-500 text-right"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">P.Rate ({settings?.currencySymbol || '₹'})</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={mobileEditPRate}
-                      onChange={(e) => setMobileEditPRate(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-base font-bold text-slate-800 outline-none focus:border-blue-500 text-right"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">S.Rate ({settings?.currencySymbol || '₹'})</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={mobileEditSRate}
-                      onChange={(e) => setMobileEditSRate(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-base font-bold text-slate-800 outline-none focus:border-blue-500 text-right"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Rate ({settings?.currencySymbol || '₹'})</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={mobileEditPRate}
+                    onChange={(e) => setMobileEditPRate(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-base font-bold text-slate-800 outline-none focus:border-blue-500 text-right"
+                  />
                 </div>
                 <div>
                   <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Discount (%)</label>
