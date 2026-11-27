@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Search, Printer, Edit, Download, Scissors, Calendar, FileText, RotateCcw, Plus, Filter, X, CreditCard, Users } from 'lucide-react';
+import { Search, Printer, Download, Scissors, Calendar, FileText, RotateCcw, Plus, Filter, X, CreditCard, Users } from 'lucide-react';
 import { useSettings } from '../../contexts/SettingsContext';
 import api from '../../services/api';
 import ReportTabs from '../../components/ReportTabs';
@@ -11,7 +11,6 @@ import PaginationControls from '../../components/PaginationControls';
 import { exportToExcel } from '../../utils/exportExcel';
 import { exportTableToPdf, type PdfColumn } from '../../utils/exportPdf';
 import TableLoader from '../../components/TableLoader';
-import { isWithinEditWindow } from '../../utils/invoiceEdit';
 
 const ServiceSalesReport = () => {
   const navigate = useNavigate();
@@ -541,26 +540,14 @@ ${totalTax > 0 ? `<div style="display:flex;justify-content:space-between;font-si
                         {formatCurrency(s.grandTotal)}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <div className="flex justify-center items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handlePrint(s)}
-                            className="text-[#059669] border border-[#059669] rounded p-1 hover:bg-[#059669] hover:text-white transition-colors"
-                            title="Print Thermal Receipt"
-                          >
-                            <Printer size={13} />
-                          </button>
-                          {isWithinEditWindow(s.date, settings) && (
-                            <button
-                              type="button"
-                              onClick={() => navigate(`/services/sales?editId=${s.id}`)}
-                              className="text-[#64748B] border border-[#64748B] rounded p-1 hover:bg-[#64748B] hover:text-white transition-colors"
-                              title="Edit Service Bill"
-                            >
-                              <Edit size={13} />
-                            </button>
-                          )}
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handlePrint(s)}
+                          className="text-[#059669] border border-[#059669] rounded p-1 hover:bg-[#059669] hover:text-white transition-colors"
+                          title="Print Thermal Receipt"
+                        >
+                          <Printer size={13} />
+                        </button>
                       </td>
                     </tr>
                   ))
