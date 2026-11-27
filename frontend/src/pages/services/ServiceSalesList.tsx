@@ -1,16 +1,17 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Printer, Trash2 } from 'lucide-react';
+import { Plus, Printer, Trash2, Edit } from 'lucide-react';
 import { useSettings } from '../../contexts/SettingsContext';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import ServiceReceiptPrintModal from '../../components/ServiceReceiptPrintModal';
 import PaginationControls from '../../components/PaginationControls';
+import { isWithinEditWindow } from '../../utils/invoiceEdit';
 
 const ServiceSalesList = () => {
   const navigate = useNavigate();
-  const { formatCurrency } = useSettings();
+  const { settings, formatCurrency } = useSettings();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
   const [paymentFilter, setPaymentFilter] = useState('All');
@@ -193,6 +194,16 @@ const ServiceSalesList = () => {
                       >
                         <Printer size={13} />
                       </button>
+                      {isWithinEditWindow(sale.date, settings) && (
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/services/sales?editId=${sale.id}`)}
+                          className="text-[#64748B] border border-[#64748B] rounded p-1 hover:bg-[#64748B] hover:text-white transition-colors"
+                          title="Edit Service Bill"
+                        >
+                          <Edit size={13} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => { if (window.confirm(`Delete bill ${sale.invoiceNo}?`)) deleteMutation.mutate(sale.id); }}

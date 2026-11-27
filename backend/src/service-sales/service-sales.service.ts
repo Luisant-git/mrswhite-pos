@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateServiceSaleDto } from './dto/create-service-sale.dto';
+import { assertEditableBySettings } from '../common/invoice-edit.util';
 
 @Injectable()
 export class ServiceSalesService {
@@ -139,6 +140,65 @@ export class ServiceSalesService {
       }
     }
     return `${prefix}${String(nextNumber).padStart(5, '0')}`;
+  }
+
+  async update(id: number, dto: CreateServiceSaleDto, userId: number) {
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.serviceSale.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException(`Service sale #${id} not found`);
+
+      await assertEditableBySettings(tx, existing.date, 'Service bills');
+
+      let resolvedCustomerId = dto.customerId || null;
+      if (!resolvedCustomerId) {
+        let cashCustomer = await tx.customer.findFirst({ where: { name: 'Cash Customer' } });
+        if (!cashCustomer) {
+          cashCustomer = await tx.customer.create({
+            data: { name: 'Cash Customer', phone: '0000000000' },
+          });
+        }
+        resolvedCustomerId = cashCustomer.id;
+      }
+
+      let actualUserId = userId;
+      if (actualUserId < 1) {
+        const firstUser = await tx.user.findFirst();
+        actualUserId = firstUser ? firstUser.id : 1;
+      }
+
+      await tx.serviceSaleItem.deleteMany({ where: { serviceSaleId: id } });
+
+      return tx.serviceSale.update({
+        where: { id },
+        data: {
+          date: new Date(dto.date),
+          customerId: resolvedCustomerId,
+          userId: actualUserId,
+          paymentModeId: dto.paymentModeId,
+          subtotal: dto.subtotal,
+          tax: dto.tax || 0,
+          discount: dto.discount || 0,
+          grandTotal: dto.grandTotal,
+          notes: dto.notes,
+          items: {
+            create: dto.items.map((item) => ({
+              serviceItemId: item.serviceItemId || null,
+              serviceName: item.serviceName,
+              quantity: item.quantity ?? 1,
+              rate: item.rate,
+              discount: item.discount || 0,
+              tax: item.tax || 0,
+              amount: item.amount,
+            })),
+          },
+        },
+        include: {
+          items: { include: { serviceItem: true } },
+          customer: true,
+          paymentMode: true,
+        },
+      });
+    });
   }
 
   async remove(id: number) {

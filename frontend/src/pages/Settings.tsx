@@ -508,7 +508,7 @@ const Settings = () => {
                       className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
                     <span className="text-[13px] font-bold text-[#334155]">Enable Invoice Editing</span>
                   </label>
-                  <p className="text-xs text-gray-500 italic ml-6 -mt-3">If enabled, users can edit a sale invoice within {watchStore('invoiceEditDays') || 30} days of its sale date.</p>
+                  <p className="text-xs text-gray-500 italic ml-6 -mt-3">If enabled, users can edit purchase, sales, estimation, and service bills within {watchStore('invoiceEditDays') || 30} days of their date.</p>
                   
                   {watchStore('enableInvoiceEdit') && (
                     <div className="ml-6 -mt-2">

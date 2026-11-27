@@ -11,7 +11,7 @@ import {
 import { useSettings } from '../../contexts/SettingsContext';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import ServiceReceiptPrintModal from '../../components/ServiceReceiptPrintModal';
 import ShortcutHelpButton from '../../components/ShortcutHelp';
 import Select from 'react-select';
@@ -42,6 +42,8 @@ type ServiceSaleValues = z.infer<typeof serviceSaleSchema>;
 
 const ServiceSalesEntry = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const editId = searchParams.get('editId');
   const { settings, formatCurrency } = useSettings();
   const queryClient = useQueryClient();
   const [savedSale, setSavedSale] = useState<any>(null);
@@ -67,6 +69,11 @@ const ServiceSalesEntry = () => {
     queryFn: async () => (await api.get('/service-sales/next-invoice-no')).data,
     staleTime: 0,
   });
+  const { data: editSaleData } = useQuery({
+    queryKey: ['service-sale', editId],
+    queryFn: async () => (await api.get(`/service-sales/${editId}`)).data,
+    enabled: !!editId,
+  });
 
   const todayStr = new Date().toISOString().split('T')[0];
   const enableTax = settings?.enableTax;
@@ -84,6 +91,39 @@ const ServiceSalesEntry = () => {
 
   const { fields, append, remove } = useFieldArray({ control, name: 'items' });
   const watchedItems = watch('items');
+
+  useEffect(() => {
+    if (editSaleData && editId) {
+      setValue('customerId', editSaleData.customerId ? Number(editSaleData.customerId) : undefined);
+      setValue('date', editSaleData.date ? new Date(editSaleData.date).toISOString().split('T')[0] : todayStr);
+      setValue('paymentModeId', Number(editSaleData.paymentModeId) || 0);
+      setValue('notes', editSaleData.notes || '');
+      setValue('grossAmount', Number(editSaleData.subtotal) || 0);
+      setValue('totalDiscount', Number(editSaleData.discount) || 0);
+      setValue('totalTax', Number(editSaleData.tax) || 0);
+      setValue('grandTotal', Number(editSaleData.grandTotal) || 0);
+
+      const loadedItems = (editSaleData.items || []).map((item: any) => {
+        const qty = Number(item.quantity) || 1;
+        const rate = Number(item.rate) || 0;
+        const gross = qty * rate;
+        const discAmt = Number(item.discount) || 0;
+        const discPercent = gross > 0 ? parseFloat(((discAmt / gross) * 100).toFixed(2)) : 0;
+        return {
+          serviceItemId: item.serviceItemId ? Number(item.serviceItemId) : undefined,
+          serviceName: item.serviceName || item.serviceItem?.name || '',
+          quantity: qty,
+          rate,
+          discPercent,
+          tax: Number(item.tax) || 0,
+          total: Number(item.amount) || 0,
+        };
+      });
+      if (loadedItems.length > 0) {
+        setValue('items', loadedItems);
+      }
+    }
+  }, [editSaleData, editId, setValue, todayStr]);
 
   // Recalculate totals
   useEffect(() => {
@@ -269,16 +309,20 @@ const ServiceSalesEntry = () => {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => api.post('/service-sales', data),
+    mutationFn: (data: any) =>
+      editId ? api.put(`/service-sales/${editId}`, data) : api.post('/service-sales', data),
     onSuccess: async (res) => {
-      toast.success(`Bill ${res.data.invoiceNo} saved!`);
+      toast.success(editId ? `Bill ${res.data.invoiceNo} updated!` : `Bill ${res.data.invoiceNo} saved!`);
+      queryClient.invalidateQueries({ queryKey: ['service-sales'] });
       queryClient.invalidateQueries({ queryKey: ['service-sales-next-invoice'] });
       const full = await api.get(`/service-sales/${res.data.id}`);
       setSavedSale(full.data);
       setIsPrintOpen(true);
       setIsMobileCheckoutOpen(false);
-      reset({ date: todayStr, paymentModeId: 0, notes: '', grossAmount: 0, totalDiscount: 0, totalTax: 0, grandTotal: 0, items: [defaultItem] });
-      setCustomerPaid('');
+      if (!editId) {
+        reset({ date: todayStr, paymentModeId: 0, notes: '', grossAmount: 0, totalDiscount: 0, totalTax: 0, grandTotal: 0, items: [defaultItem] });
+        setCustomerPaid('');
+      }
     },
     onError: (err: any) => toast.error(err.response?.data?.message || 'Failed to save bill'),
   });
@@ -372,12 +416,12 @@ const ServiceSalesEntry = () => {
             <span className="opacity-50">/</span>
             <span className="opacity-70">Services</span>
             <span className="opacity-50">/</span>
-            <span className="text-[#6EE7B7]">Service Sales Entry</span>
+            <span className="text-[#6EE7B7]">{editId ? 'Edit Service Bill' : 'Service Sales Entry'}</span>
           </div>
           <div className="flex items-center gap-1 text-[11px] font-bold">
             <Scissors size={12} className="text-[#6EE7B7]" />
             <span className="text-[#A7F3D0]">Invoice:</span>
-            <span className="text-white font-mono">{nextInvoiceNo || '...'}</span>
+            <span className="text-white font-mono">{editId ? (editSaleData?.invoiceNo || `#${editId}`) : (nextInvoiceNo || '...')}</span>
             <span className="mx-2 text-white/30">|</span>
             <span className="text-[#6EE7B7] text-[10px]">No stock tracking</span>
           </div>
@@ -636,7 +680,7 @@ const ServiceSalesEntry = () => {
                   onClick={handleSubmit(onSubmit as any, onFormError)}
                 >
                   <span className="opacity-70 border-r border-[#34D399] pr-1 mr-1">F10</span> 
-                  {createMutation.isPending ? 'Saving...' : 'Save & Print'}
+                  {createMutation.isPending ? 'Saving...' : editId ? 'Update & Print' : 'Save & Print'}
                 </button>
                 <button 
                   type="button"
@@ -717,10 +761,10 @@ const ServiceSalesEntry = () => {
                 <ArrowLeft size={18} />
               </button>
               <div>
-                <h1 className="text-base font-extrabold text-white leading-tight">Service Sales</h1>
+                <h1 className="text-base font-extrabold text-white leading-tight">{editId ? 'Edit Service Bill' : 'Service Sales'}</h1>
                 <p className="text-[11px] text-[#A7F3D0] font-medium flex items-center gap-1">
                   <span>Inv:</span>
-                  <span className="font-mono font-bold text-white">{nextInvoiceNo || '...'}</span>
+                  <span className="font-mono font-bold text-white">{editId ? (editSaleData?.invoiceNo || `#${editId}`) : (nextInvoiceNo || '...')}</span>
                 </p>
               </div>
             </div>
@@ -1116,7 +1160,7 @@ const ServiceSalesEntry = () => {
                   className="w-full bg-[#047857] hover:bg-[#065F46] active:scale-[0.99] text-white font-extrabold py-3.5 rounded-2xl flex justify-center items-center gap-2 shadow-lg shadow-emerald-900/20 text-base transition-all disabled:opacity-50"
                 >
                   <CheckCircle size={18} />
-                  <span>{createMutation.isPending ? 'Saving Bill...' : 'Save & Print Bill'}</span>
+                  <span>{createMutation.isPending ? 'Saving Bill...' : editId ? 'Update & Print Bill' : 'Save & Print Bill'}</span>
                 </button>
               </div>
 
