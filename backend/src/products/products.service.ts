@@ -7,37 +7,48 @@ import { PrismaService } from '../prisma/prisma.service';
 export class ProductsService {
   constructor(private prisma: PrismaService) {}
 
-  create(createProductDto: CreateProductDto) {
+  async create(createProductDto: CreateProductDto) {
     const { rawMaterials, ...productData } = createProductDto;
-    
-    return this.prisma.product.create({
-      data: {
-        ...productData,
-        rawMaterials: rawMaterials && rawMaterials.length > 0 ? {
-          create: rawMaterials.map(rmId => ({
-            rawMaterialId: rmId
-          }))
-        } : undefined
-      },
-      include: {
-        rawMaterials: true
+    const trimmedCode = (productData.code || '').trim();
+    const resolvedCode = trimmedCode || (await this.getNextCode()).code;
+
+    try {
+      return await this.prisma.product.create({
+        data: {
+          ...productData,
+          code: resolvedCode,
+          rawMaterials: rawMaterials && rawMaterials.length > 0 ? {
+            create: rawMaterials.map(rmId => ({
+              rawMaterialId: rmId
+            }))
+          } : undefined
+        },
+        include: {
+          rawMaterials: true
+        }
+      });
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        throw new BadRequestException(`Product code "${resolvedCode}" already exists.`);
       }
-    });
+      throw error;
+    }
   }
 
   async getNextCode() {
-    const lastProduct = await this.prisma.product.findFirst({
-      orderBy: { id: 'desc' },
-      select: { code: true }
+    const productsWithPCode = await this.prisma.product.findMany({
+      where: { code: { startsWith: 'P' } },
+      select: { code: true },
     });
-    let nextNumber = 1;
-    if (lastProduct && lastProduct.code) {
-      const match = lastProduct.code.match(/\d+$/);
+    let maxNumber = 0;
+    for (const p of productsWithPCode) {
+      const match = p.code.match(/^P(\d+)$/);
       if (match) {
-        nextNumber = parseInt(match[0], 10) + 1;
+        const num = parseInt(match[1], 10);
+        if (num > maxNumber) maxNumber = num;
       }
     }
-    return { code: `P${nextNumber.toString().padStart(6, '0')}` };
+    return { code: `P${(maxNumber + 1).toString().padStart(6, '0')}` };
   }
 
   findAll(query?: any) {
@@ -99,6 +110,12 @@ export class ProductsService {
 
   async update(id: number, updateProductDto: UpdateProductDto) {
     const { rawMaterials, ...productData } = updateProductDto as any;
+    if (productData.code !== undefined) {
+      productData.code = String(productData.code).trim();
+      if (!productData.code) {
+        throw new BadRequestException('Product code cannot be empty.');
+      }
+    }
 
     // If rawMaterials is provided, we need to delete existing and recreate
     if (rawMaterials !== undefined) {
@@ -107,22 +124,29 @@ export class ProductsService {
       });
     }
 
-    return this.prisma.product.update({
-      where: { id },
-      data: {
-        ...productData,
-        ...(rawMaterials !== undefined ? {
-          rawMaterials: {
-            create: rawMaterials.map((rmId: number) => ({
-              rawMaterialId: rmId
-            }))
-          }
-        } : {})
-      },
-      include: {
-        rawMaterials: true
+    try {
+      return await this.prisma.product.update({
+        where: { id },
+        data: {
+          ...productData,
+          ...(rawMaterials !== undefined ? {
+            rawMaterials: {
+              create: rawMaterials.map((rmId: number) => ({
+                rawMaterialId: rmId
+              }))
+            }
+          } : {})
+        },
+        include: {
+          rawMaterials: true
+        }
+      });
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        throw new BadRequestException(`Product code "${productData.code}" already exists.`);
       }
-    });
+      throw error;
+    }
   }
 
   async remove(id: number) {

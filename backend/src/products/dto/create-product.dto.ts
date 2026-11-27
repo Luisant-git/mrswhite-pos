@@ -5,7 +5,8 @@ export class CreateProductDto {
   name: string;
 
   @IsString()
-  code: string;
+  @IsOptional()
+  code?: string;
 
   @IsString()
   @IsOptional()

@@ -13,7 +13,7 @@ import LeaveConfirmModal from '../../components/LeaveConfirmModal';
 import { useNavigate } from 'react-router-dom';
 
 const productSchema = z.object({
-  code: z.string().min(1, 'Product Code is required'),
+  code: z.string().trim().optional(),
   name: z.string().min(1, 'Product Name is required'),
   categoryId: z.string().optional(),
   brandId: z.string().optional(),
@@ -167,12 +167,6 @@ const Products = () => {
     queryFn: async () => (await api.get('/products/next-code')).data
   });
 
-  useEffect(() => {
-    if (nextCodeData?.code && !editingId) {
-      setValue('code', nextCodeData.code);
-    }
-  }, [nextCodeData, editingId, setValue]);
-
   const handleAutoCode = async () => {
     try {
       const res = await api.get('/products/next-code');
@@ -193,8 +187,14 @@ const Products = () => {
 
   const mutation = useMutation({
     mutationFn: async (data: ProductFormValues) => {
+      const typedCode = (data.code || '').trim();
+      const resolvedCode = typedCode || (!editingId ? (nextCodeData?.code || 'P000001') : '');
+      if (!resolvedCode) {
+        throw new Error('Product Code is required');
+      }
       const payload = {
         ...data,
+        code: resolvedCode,
         categoryId: data.categoryId ? parseInt(data.categoryId) : undefined,
         brandId: data.brandId ? parseInt(data.brandId) : undefined,
         unitId: parseInt(data.unitId || '0'),
@@ -216,7 +216,7 @@ const Products = () => {
     },
     onError: (err: any) => {
       console.error(err);
-      toast.error(err?.response?.data?.message || 'Failed to save product. Please check your inputs.');
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to save product. Please check your inputs.');
     }
   });
 
@@ -274,9 +274,6 @@ const Products = () => {
       minStock: '' as any,
       reorderLevel: '' as any,
     });
-    if (nextCodeData?.code) {
-      setValue('code', nextCodeData.code);
-    }
     setIsMobileDrawerOpen(true);
   };
 
@@ -369,9 +366,8 @@ const Products = () => {
                 <input
                   {...register('code')}
                   type="text"
-                  readOnly
-                  placeholder="Code"
-                  className="w-full px-3 py-1.5 border border-[#ccc] rounded shadow-inner focus:border-[#3B82F6] outline-none text-[13px] bg-gray-100"
+                  placeholder={nextCodeData?.code || 'P000001'}
+                  className="w-full px-3 py-1.5 border border-[#ccc] rounded shadow-inner focus:border-[#3B82F6] outline-none text-[13px] bg-white"
                 />
                 {errors.code && <span className="text-red-500 text-xs mt-1 block">{errors.code.message}</span>}
               </div>
