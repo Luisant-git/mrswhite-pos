@@ -2,6 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { CreateEstimationDto } from './dto/create-estimation.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionType } from '@prisma/client';
+import { assertEditableBySettings } from '../common/invoice-edit.util';
 
 @Injectable()
 export class EstimationsService {
@@ -206,6 +207,8 @@ export class EstimationsService {
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.estimation.findUnique({ where: { id }, include: { items: true } });
       if (!existing) throw new BadRequestException('Estimation not found');
+
+      await assertEditableBySettings(tx, existing.date, 'Estimations');
 
       const settings = await tx.settings.findUnique({ where: { id: 1 } });
 

@@ -210,6 +210,7 @@ const Estimation = () => {
   useEffect(() => {
     if (editEstimationData && editEstimationData.items) {
       setValue('customerId', editEstimationData.customerId);
+      setValue('paymentModeId', Number(editEstimationData.paymentModeId) || 0);
       setValue('estimationNo', editEstimationData.estimationNo);
       setValue('date', editEstimationData.date ? new Date(editEstimationData.date).toISOString().split('T')[0] : '');
       setValue('grossAmount', Number(editEstimationData.subtotal));
@@ -362,9 +363,9 @@ const Estimation = () => {
         queryClient.invalidateQueries({ queryKey: ['nextEstimationNo'] });
       }, 100);
     },
-    onError: (error) => {
+    onError: (error: any) => {
       console.error(error);
-      toast.error('Failed to record sale. Please check your inputs.');
+      toast.error(error?.response?.data?.message || 'Failed to save estimation. Please check your inputs.');
     }
   });
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Download, FileText, Search, Calendar, FileDigit, Users, CreditCard, RotateCcw, Plus, Printer, Eye, Pencil, Filter, X } from 'lucide-react';
+import { Download, FileText, Search, Calendar, FileDigit, Users, CreditCard, RotateCcw, Plus, Printer, Eye, Edit, Filter, X } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSettings } from '../../contexts/SettingsContext';
 import api from '../../services/api';
@@ -12,6 +12,7 @@ import ViewSalesModal from '../sales/ViewSalesModal';
 import PaginationControls from '../../components/PaginationControls';
 import SearchableSelect from '../../components/SearchableSelect';
 import TableLoader from '../../components/TableLoader';
+import { isWithinEditWindow } from '../../utils/invoiceEdit';
 
 
 
@@ -348,13 +349,13 @@ const SalesReport = () => {
                               >
                                 <Eye size={14} />
                               </button>
-                              {settings?.enableInvoiceEdit && new Date(s.date).getTime() >= Date.now() - ((settings?.invoiceEditDays || 30) * 24 * 60 * 60 * 1000) && (
+                              {isWithinEditWindow(s.date, settings) && (
                                 <button type="button"
                                   onClick={() => navigate(`/sales/pos?editId=${s.id}`)}
                                   className="text-[#64748B] border border-[#64748B] rounded p-1 hover:bg-[#64748B] hover:text-white transition-colors"
                                   title="Edit Invoice"
                                 >
-                                  <Pencil size={14} />
+                                  <Edit size={14} />
                                 </button>
                               )}
                               <button type="button"

@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Plus, Eye, Printer, ArrowRightLeft } from 'lucide-react';
+import { Plus, Eye, Printer, Edit, ArrowRightLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import InvoicePrintModal from '../../components/InvoicePrintModal';
 import { useSettings } from '../../contexts/SettingsContext';
 import PaginationControls from '../../components/PaginationControls';
 import ViewEstimationModal from './ViewEstimationModal';
+import { isWithinEditWindow } from '../../utils/invoiceEdit';
 
 const EstimationList = () => {
-  const { formatCurrency } = useSettings();
+  const { settings, formatCurrency } = useSettings();
   const navigate = useNavigate();
   
   const [searchTerm, setSearchTerm] = useState('');
@@ -189,6 +190,15 @@ const EstimationList = () => {
                         >
                           <Eye size={14} />
                         </button>
+                        {isWithinEditWindow(est.date, settings) && (
+                          <button type="button"
+                            onClick={() => navigate(`/sales/estimation?editId=${est.id}`)}
+                            className="text-[#64748B] border border-[#64748B] rounded p-1 hover:bg-[#64748B] hover:text-white transition-colors"
+                            title="Edit Estimation"
+                          >
+                            <Edit size={14} />
+                          </button>
+                        )}
                         {/* <button type="button" 
                           onClick={() => {
                             if (window.confirm('Are you sure you want to delete this estimation?')) {

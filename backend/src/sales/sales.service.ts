@@ -1,7 +1,8 @@
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionType } from '@prisma/client';
+import { assertEditableBySettings } from '../common/invoice-edit.util';
 
 @Injectable()
 export class SalesService {
@@ -95,18 +96,12 @@ export class SalesService {
           throw new BadRequestException(`Product not found: ${item.productId}`);
         }
 
-        const dataToUpdate: any = {
-          currentStock: { decrement: item.quantity },
-        };
-
-        if (item.rate > Number(currentProduct.sellingRate)) {
-          dataToUpdate.sellingRate = item.rate;
-        }
-
-        // Decrement current stock (allow negative stock to let checkout proceed)
+        // Decrement current stock (allow negative stock to let checkout proceed; rates stay in Product Master only)
         const updatedProduct = await tx.product.update({
           where: { id: item.productId },
-          data: dataToUpdate,
+          data: {
+            currentStock: { decrement: item.quantity },
+          },
         });
 
         // Add ledger entry
@@ -198,19 +193,8 @@ export class SalesService {
       });
       if (!existing) throw new BadRequestException('Sale not found');
 
-      // 2. Enforce "Invoice Edit Permission" setting
-      const settings = await tx.settings.findUnique({ where: { id: 1 } });
-      if (!settings?.enableInvoiceEdit) {
-        throw new ForbiddenException('Invoice editing is disabled in Settings.');
-      }
-
-      // 3. Enforce dynamic edit window based on the sale date
-      const saleDate = new Date(existing.date).getTime();
-      const invoiceEditDays = settings?.invoiceEditDays || 30;
-      const cutoff = Date.now() - invoiceEditDays * 24 * 60 * 60 * 1000;
-      if (saleDate < cutoff) {
-        throw new ForbiddenException(`Invoices can only be edited within ${invoiceEditDays} days of the sale date.`);
-      }
+      // 2. Enforce "Enable Invoice Editing" and edit window from Settings
+      await assertEditableBySettings(tx, existing.date, 'Invoices');
 
       // 4. Reverse previous stock and ledger entries
       for (const item of existing.items) {
@@ -293,14 +277,9 @@ export class SalesService {
         const currentProduct = await tx.product.findUnique({ where: { id: item.productId } });
         if (!currentProduct) throw new BadRequestException(`Product not found: ${item.productId}`);
 
-        const dataToUpdate: any = { currentStock: { decrement: item.quantity } };
-        if (item.rate > Number(currentProduct.sellingRate)) {
-          dataToUpdate.sellingRate = item.rate;
-        }
-
         const updatedProduct = await tx.product.update({
           where: { id: item.productId },
-          data: dataToUpdate,
+          data: { currentStock: { decrement: item.quantity } },
         });
 
         await tx.stockTransaction.create({

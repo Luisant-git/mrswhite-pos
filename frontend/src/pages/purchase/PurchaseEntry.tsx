@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -80,6 +80,8 @@ type PurchaseFormValues = z.infer<typeof purchaseSchema>;
 const PurchaseEntry = () => {
   const { settings, formatCurrency } = useSettings();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const editId = searchParams.get('editId');
   const queryClient = useQueryClient();
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
   const [newSupplier, setNewSupplier] = useState({ name: '', phone: '', address: '', state: '' });
@@ -198,13 +200,53 @@ const PurchaseEntry = () => {
   const { data: products = [] } = useQuery({ queryKey: ['products'], queryFn: async () => (await api.get('/products')).data });
   const { data: nextEntryData } = useQuery({ queryKey: ['nextEntryNo'], queryFn: async () => (await api.get('/purchases/next-entry-no')).data });
   const { data: paymentModes = [] } = useQuery({ queryKey: ['paymentModes'], queryFn: async () => (await api.get('/payment-modes')).data });
+  const { data: editPurchaseData } = useQuery({
+    queryKey: ['purchase', editId],
+    queryFn: async () => (await api.get(`/purchases/${editId}`)).data,
+    enabled: !!editId,
+  });
 
   // Update default entry no
   useEffect(() => {
-    if (nextEntryData?.entryNo) {
+    if (nextEntryData?.entryNo && !editId) {
       setValue('entryNo', nextEntryData.entryNo);
     }
-  }, [nextEntryData, setValue]);
+  }, [nextEntryData, setValue, editId]);
+
+  // Pre-fill form in edit mode
+  useEffect(() => {
+    if (editPurchaseData && editId) {
+      setValue('entryNo', editPurchaseData.invoiceNo || '');
+      setValue('invoiceNo', editPurchaseData.supplierInvoiceNo || '');
+      setValue('invoiceDate', editPurchaseData.invoiceDate ? new Date(editPurchaseData.invoiceDate).toISOString().split('T')[0] : '');
+      setValue('date', editPurchaseData.date ? new Date(editPurchaseData.date).toISOString().split('T')[0] : '');
+      setValue('supplierId', Number(editPurchaseData.supplierId) || 0);
+      setValue('paymentModeId', Number(editPurchaseData.paymentModeId) || 0);
+      setValue('totalDiscount', Number(editPurchaseData.discount) || ('' as any));
+      setValue('transportCharge', Number(editPurchaseData.transportCharge) || ('' as any));
+      setValue('wages', Number(editPurchaseData.wages) || ('' as any));
+      setValue('tax', Number(editPurchaseData.tax) || 0);
+      setValue('totalAmount', Number(editPurchaseData.subtotal) || 0);
+      setValue('netAmount', Number(editPurchaseData.grandTotal) || 0);
+
+      const loadedItems = (editPurchaseData.items || []).map((item: any) => ({
+        productId: Number(item.productId),
+        quantity: Number(item.quantity),
+        unit: item.product?.unit?.shortCode || item.product?.unit?.name || 'Nos',
+        pRate: Number(item.rate) || 0,
+        wRate: Number(item.product?.wholesaleRate) || 0,
+        sRate: Number(item.product?.sellingRate) || 0,
+        mrp: Number(item.product?.mrp) || 0,
+        discPercent: 0,
+        discAmt: 0,
+        tax: Number(item.tax) || 0,
+        total: Number(item.amount) || 0,
+      }));
+      if (loadedItems.length > 0) {
+        setValue('items', loadedItems);
+      }
+    }
+  }, [editPurchaseData, editId, setValue]);
 
   // Watch values for calculation
   const items = watch('items');
@@ -266,38 +308,22 @@ const PurchaseEntry = () => {
 
   }, [JSON.stringify(items), watchTotalDiscount, watchTransportCharge, watchwages, watchRoundOff, setValue, settings?.enableTax, products]);
 
-  const handleProductChange = async (index: number, productId: string) => {
+  const handleProductChange = (index: number, productId: string) => {
     const product = products.find((p: any) => p.id === Number(productId));
     if (product) {
       setValue(`items.${index}.unit`, product.unit?.shortCode || product.unit?.name || 'Nos');
-
-      try {
-        const response = await api.get(`/purchases/latest-rate/${productId}`);
-        const latest = response.data;
-        if (latest) {
-          setValue(`items.${index}.pRate`, latest.rate || product.purchaseRate || 0);
-          setValue(`items.${index}.wRate`, latest.wRate || product.wholesaleRate || 0);
-          setValue(`items.${index}.sRate`, latest.sRate || product.sellingRate || 0);
-          setValue(`items.${index}.mrp`, latest.mrp || product.mrp || 0);
-        } else {
-          setValue(`items.${index}.pRate`, product.purchaseRate || 0);
-          setValue(`items.${index}.wRate`, product.wholesaleRate || 0);
-          setValue(`items.${index}.sRate`, product.sellingRate || 0);
-          setValue(`items.${index}.mrp`, product.mrp || 0);
-        }
-      } catch (e) {
-        setValue(`items.${index}.pRate`, product.purchaseRate || 0);
-        setValue(`items.${index}.wRate`, product.wholesaleRate || 0);
-        setValue(`items.${index}.sRate`, product.sellingRate || 0);
-        setValue(`items.${index}.mrp`, product.mrp || 0);
-      }
+      setValue(`items.${index}.pRate`, Number(product.purchaseRate) || 0);
+      setValue(`items.${index}.wRate`, Number(product.wholesaleRate) || 0);
+      setValue(`items.${index}.sRate`, Number(product.sellingRate) || 0);
+      setValue(`items.${index}.mrp`, Number(product.mrp) || 0);
     }
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: PurchaseFormValues) => api.post('/purchases', data),
+    mutationFn: (data: PurchaseFormValues) =>
+      editId ? api.put(`/purchases/${editId}`, data) : api.post('/purchases', data),
     onSuccess: () => {
-      toast.success('Purchase recorded successfully!');
+      toast.success(editId ? 'Purchase updated successfully!' : 'Purchase recorded successfully!');
 
       setTimeout(() => {
         if (printAfterSaveRef.current) {
@@ -310,9 +336,9 @@ const PurchaseEntry = () => {
         navigate('/purchase');
       }, 100);
     },
-    onError: (error) => {
+    onError: (error: any) => {
       console.error(error);
-      toast.error('Failed to record purchase. Please check your inputs.');
+      toast.error(error?.response?.data?.message || 'Failed to save purchase. Please check your inputs.');
     }
   });
 
@@ -652,7 +678,7 @@ const PurchaseEntry = () => {
               onClick={handleSubmit(onSubmit as any, onError)}
               className="bg-[#059669] hover:bg-[#047857] text-white px-3 sm:px-4 py-2 sm:py-1.5 rounded flex items-center gap-2 font-bold text-[13px] transition-colors"
             >
-              <CheckCircle size={16} /> <span className="hidden sm:inline">SAVE PURCHASE (F10)</span><span className="sm:hidden">Save</span>
+              <CheckCircle size={16} /> <span className="hidden sm:inline">{editId ? 'UPDATE PURCHASE (F10)' : 'SAVE PURCHASE (F10)'}</span><span className="sm:hidden">{editId ? 'Update' : 'Save'}</span>
             </button>
           </div>
           <button
@@ -1108,7 +1134,7 @@ const PurchaseEntry = () => {
               onClick={handleSubmit(onSubmit as any, onError)}
             >
               <span className="opacity-70 border-r border-[#34D399] pr-1 mr-1">F10</span>
-              {createMutation.isPending ? 'Saving...' : 'Save Purchase'}
+              {createMutation.isPending ? 'Saving...' : editId ? 'Update Purchase' : 'Save Purchase'}
             </button>
             <button
               type="button"
@@ -1136,8 +1162,8 @@ const PurchaseEntry = () => {
         <div className="bg-gradient-to-r from-[#0B355B] to-[#1E5F8A] text-white px-4 py-3 shrink-0 shadow-md">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-xl font-extrabold text-white leading-tight">Purchase Entry</h1>
-              <p className="text-xs text-blue-200 mt-0.5 font-medium">Tap a product to add to order</p>
+              <h1 className="text-xl font-extrabold text-white leading-tight">{editId ? 'Edit Purchase' : 'Purchase Entry'}</h1>
+              <p className="text-xs text-blue-200 mt-0.5 font-medium">{editId ? watch('entryNo') : 'Tap a product to add to order'}</p>
             </div>
             <div className="flex items-center gap-2">
               {validMobileCartItems.length > 0 && (
@@ -1485,7 +1511,7 @@ const PurchaseEntry = () => {
                   className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] disabled:opacity-50 text-white py-3.5 rounded-xl font-extrabold text-base flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition-all"
                 >
                   <CheckCircle size={20} />
-                  <span>{createMutation.isPending ? 'SAVING...' : 'SAVE PURCHASE'}</span>
+                  <span>{createMutation.isPending ? 'SAVING...' : editId ? 'UPDATE PURCHASE' : 'SAVE PURCHASE'}</span>
                 </button>
               </div>
             </div>
