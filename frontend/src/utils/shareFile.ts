@@ -63,12 +63,12 @@ export const shareOrDownloadFile = async ({
       if (err?.name === 'AbortError') {
         return 'aborted';
       }
-      console.warn('Native share unavailable or failed, downloading instead:', err);
       downloadBlobFile(blob, fileName);
-      const reason = err?.name
-        ? `${err.name}${err?.message ? `: ${String(err.message).slice(0, 60)}` : ''}`
-        : 'native share unavailable';
-      toast.success(`${fileName} downloaded (${reason})`);
+      if (err?.name === 'NotAllowedError') {
+        toast.success(`${fileName} downloaded (Windows Share permission denied by browser)`);
+      } else {
+        toast.success(`${fileName} downloaded (native share unavailable)`);
+      }
       return 'downloaded';
     }
   }
@@ -77,7 +77,7 @@ export const shareOrDownloadFile = async ({
   if (typeof window !== 'undefined' && !window.isSecureContext) {
     toast.success(`${fileName} downloaded (Windows native share requires HTTPS or localhost)`);
   } else {
-    toast.success(`${fileName} downloaded (browser does not support file sharing here)`);
+    toast.success(`${fileName} downloaded (browser does not support native share)`);
   }
   return 'downloaded';
 };

@@ -121,6 +121,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   const [isDownloadingQR, setIsDownloadingQR] = useState(false);
   const preloadedLogoRef = useRef<{ src: string; dataUrl: string; width: number; height: number } | null>(null);
   const failedLogoSrcRef = useRef<string | null>(null);
+  const preloadedPayIconsRef = useRef<HTMLImageElement[] | null>(null);
   const [printFormat, setPrintFormat] = useState<'a4' | 'a5' | 'thermal'>(
     () => {
       const saved = (localStorage.getItem('invoicePrintFormat') || 'a4').toLowerCase();
@@ -188,15 +189,27 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
     img.onload = () => {
       if (cancelled) return;
       try {
+        const srcW = img.width || 100;
+        const srcH = img.height || 40;
+        const maxLogoPxW = 400;
+        const maxLogoPxH = 160;
+        const scale = Math.min(1, maxLogoPxW / srcW, maxLogoPxH / srcH);
+        const targetW = Math.max(1, Math.round(srcW * scale));
+        const targetH = Math.max(1, Math.round(srcH * scale));
         const cv = document.createElement('canvas');
-        cv.width = img.width || 100;
-        cv.height = img.height || 40;
-        cv.getContext('2d')?.drawImage(img, 0, 0);
+        cv.width = targetW;
+        cv.height = targetH;
+        const ctx = cv.getContext('2d');
+        if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+        }
         preloadedLogoRef.current = {
           src: logoSrc,
           dataUrl: cv.toDataURL('image/png'),
-          width: cv.width,
-          height: cv.height,
+          width: targetW,
+          height: targetH,
         };
         failedLogoSrcRef.current = null;
       } catch {
@@ -215,6 +228,31 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       cancelled = true;
     };
   }, [isOpen, settings?.logoImage]);
+
+  useEffect(() => {
+    if (!isOpen || preloadedPayIconsRef.current) return;
+    let cancelled = false;
+    const srcs = ['/icons/gpay.png', '/icons/phonepe.png', '/icons/paytm.png', '/icons/upi.png'];
+    Promise.all(
+      srcs.map(
+        (src) =>
+          new Promise<HTMLImageElement>((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'Anonymous';
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = src;
+          })
+      )
+    )
+      .then((imgs) => {
+        if (!cancelled) preloadedPayIconsRef.current = imgs;
+      })
+      .catch(() => { /* fallback handled at share time */ });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen && invoiceNo) {
@@ -332,7 +370,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   const handleWhatsApp = async () => {
     setIsSharing(true);
     try {
-      const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+      const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
       const W = 210;
       const margin = 14;
       let y = margin;
@@ -358,25 +396,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
             const ratio = Math.min(maxW / (cached.width || 100), maxH / (cached.height || 40));
             const lw = (cached.width || 100) * ratio;
             const lh = (cached.height || 40) * ratio;
-            doc.addImage(cached.dataUrl, 'PNG', col, y, lw, lh);
-            y += lh + 4;
-          } catch { /* skip */ }
-        } else if (failedLogoSrcRef.current !== settings.logoImage && settings.logoImage.startsWith('data:')) {
-          try {
-            const logoImg = await new Promise<HTMLImageElement>((resolve, reject) => {
-              const img = new Image();
-              const timer = window.setTimeout(() => reject(new Error('Logo load timeout')), 500);
-              img.onload = () => { window.clearTimeout(timer); resolve(img); };
-              img.onerror = (e) => { window.clearTimeout(timer); reject(e); };
-              img.src = settings.logoImage!;
-            });
-            const ratio = Math.min(maxW / (logoImg.width || 100), maxH / (logoImg.height || 40));
-            const lw = (logoImg.width || 100) * ratio, lh = (logoImg.height || 40) * ratio;
-            const cv = document.createElement('canvas'); cv.width = logoImg.width; cv.height = logoImg.height;
-            cv.getContext('2d')!.drawImage(logoImg, 0, 0);
-            const dataUrl = cv.toDataURL('image/png');
-            preloadedLogoRef.current = { src: settings.logoImage, dataUrl, width: cv.width, height: cv.height };
-            doc.addImage(dataUrl, 'PNG', col, y, lw, lh);
+            doc.addImage(cached.dataUrl, 'PNG', col, y, lw, lh, undefined, 'FAST');
             y += lh + 4;
           } catch { /* skip */ }
         }
@@ -649,7 +669,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
           const styledCanvas = document.createElement('canvas');
           const ctx2 = styledCanvas.getContext('2d');
           if (ctx2) {
-            const sc = 3;
+            const sc = 2;
             const sw = 200 * sc; const sh = 200 * sc;
             styledCanvas.width = sw; styledCanvas.height = sh;
             ctx2.imageSmoothingEnabled = true; ctx2.imageSmoothingQuality = 'high';
@@ -673,7 +693,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
             const dataUrl = styledCanvas.toDataURL('image/png');
             const qrY = Math.min(bottomBlockY, 244);
             const qrW = 34; const qrH = 34;
-            doc.addImage(dataUrl, 'PNG', col, qrY, qrW, qrH);
+            doc.addImage(dataUrl, 'PNG', col, qrY, qrW, qrH, undefined, 'FAST');
             const dlUrl = window.location.origin + '/upi-redirect?pa=' + encodeURIComponent(activeUpiId.trim()) + '&pn=' + encodeURIComponent((settings && settings.shopName) || 'Shop') + '&tr=' + encodeURIComponent(invoiceNo) + '&am=' + Number(grandTotal).toFixed(2) + '&cu=INR';
             doc.link(col, qrY, qrW, qrH, { url: dlUrl });
           }
@@ -698,7 +718,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       doc.setFont('helvetica', 'normal'); doc.setTextColor('#94a3b8');
       doc.text(`This is a computer generated invoice | Thank you for partnering with ${settings?.shopName || 'POS Suite 360'}!`, W / 2, 288, { align: 'center' });
 
-      const pdfBlob = new Blob([doc.output('blob')], { type: 'application/pdf' });
+      const pdfBlob = doc.output('blob');
       const safeDocNo = sanitizeFileNamePart(invoiceNo, 'document');
       const docPrefix = isEstimation ? 'Estimation' : 'Invoice';
       await shareOrDownloadFile({
@@ -910,12 +930,14 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       };
 
       try {
-        const [gpayImg, phonepeImg, paytmImg, upiImg] = await Promise.all([
-          loadImage('/icons/gpay.png'),
-          loadImage('/icons/phonepe.png'),
-          loadImage('/icons/paytm.png'),
-          loadImage('/icons/upi.png')
-        ]);
+      const [gpayImg, phonepeImg, paytmImg, upiImg] = preloadedPayIconsRef.current
+        ? preloadedPayIconsRef.current
+        : await Promise.all([
+            loadImage('/icons/gpay.png'),
+            loadImage('/icons/phonepe.png'),
+            loadImage('/icons/paytm.png'),
+            loadImage('/icons/upi.png')
+          ]);
 
         const drawImageAspect = (img: HTMLImageElement, x: number, y: number, maxWidth: number, maxHeight: number) => {
           let w = img.width || 100;
