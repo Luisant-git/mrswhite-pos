@@ -354,8 +354,9 @@ model SaleItem {
   isService Boolean @default(false)
   itemName  String? // Store the name snapshot (useful for services)
 
-  quantity Decimal
-  rate     Decimal
+  quantity     Decimal
+  freeQuantity Decimal @default(0)
+  rate         Decimal
   discount Decimal @default(0)
   tax      Decimal @default(0)
   amount   Decimal

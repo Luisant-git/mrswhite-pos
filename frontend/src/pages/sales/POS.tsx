@@ -54,6 +54,7 @@ const numberToWords = (num: number): string => {
 const saleItemSchema = z.object({
   productId: z.coerce.number().min(0),
   quantity: z.coerce.number().min(0),
+  freeQuantity: z.coerce.number().min(0).optional().default(0),
   stock: z.coerce.number(),
   rate: z.coerce.number().min(0),
   unit: z.string().optional().nullable(),
@@ -119,7 +120,7 @@ const freshFormValues = (invoiceNo: string = 'Generating...') => ({
   customerId: 0,
   rateType: 'Retail Rate',
   paymentModeId: 0,
-  items: [{ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }],
+  items: [{ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }],
   grossAmount: 0,
   totalDiscountPercent: '' as any,
   totalDiscount: '' as any,
@@ -183,7 +184,7 @@ const POS = () => {
           if (selectEl) selectEl.focus();
         }, 80);
       } else {
-        append({ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
+        append({ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
         setTimeout(() => {
           const selectEl = document.querySelector<HTMLElement>(`[data-row-product="${nextRow}"] input`);
           if (selectEl) selectEl.focus();
@@ -202,7 +203,7 @@ const POS = () => {
             if (selectEl) selectEl.focus();
           }, 80);
         } else {
-          append({ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
+          append({ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
           setTimeout(() => {
             const selectEl = document.querySelector<HTMLElement>(`[data-row-product="${nextRow}"] input`);
             if (selectEl) selectEl.focus();
@@ -251,7 +252,7 @@ const POS = () => {
       customerId: 0,
       rateType: 'Retail Rate',
       paymentModeId: 0,
-      items: [{ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }],
+      items: [{ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }],
       grossAmount: 0,
       totalDiscountPercent: '' as any,
       totalDiscount: '' as any,
@@ -318,6 +319,7 @@ const POS = () => {
       const posItems = estimationData.items.map((item: any) => ({
         productId: item.productId,
         quantity: item.quantity,
+        freeQuantity: 0,
         stock: item.product?.currentStock || 0,
         rate: Number(item.rate),
         unit: item.product?.unit?.shortCode || 'Nos',
@@ -359,10 +361,12 @@ const POS = () => {
         }
         const product = products.find((p: any) => p.id === Number(productId));
         const qty = Number(item.quantity);
+        const freeQty = Number(item.freeQuantity || 0);
         return {
           productId,
           quantity: qty,
-          stock: Math.max(product?.currentStock ?? qty, qty),
+          freeQuantity: freeQty,
+          stock: Math.max(product?.currentStock ?? (qty + freeQty), qty + freeQty),
           rate: Number(item.rate),
           unit: item.product?.unit?.shortCode || 'Nos',
           discPercent: 0,
@@ -469,6 +473,7 @@ const POS = () => {
         setValue(`items.${index}.isService`, true);
         setValue(`items.${index}.serviceItemId`, item.originalServiceId);
         setValue(`items.${index}.itemName`, item.name);
+        setValue(`items.${index}.freeQuantity`, 0);
       } else {
         setValue(`items.${index}.isService`, false);
         setValue(`items.${index}.serviceItemId`, undefined);
@@ -650,6 +655,7 @@ const POS = () => {
         isService: item.isService || false,
         itemName: item.itemName,
         quantity: Number(item.quantity),
+        freeQuantity: item.isService ? 0 : Number(item.freeQuantity || 0),
         rate: Number(item.rate),
         discount: Number(item.discAmt || 0),
         tax: Number(item.tax || 0),
@@ -805,7 +811,7 @@ const POS = () => {
       };
     });
     const finalItems = loadedItems.length ? loadedItems : [
-      { productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }
+      { productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }
     ];
     reset({
       ...data,
@@ -998,7 +1004,7 @@ const POS = () => {
         handleClear();
       } else if (e.key === 'F2') {
         e.preventDefault();
-        append({ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
+        append({ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
         setTimeout(() => {
           const inputs = document.querySelectorAll<HTMLElement>('[data-row-product] input');
           if (inputs.length > 0) inputs[inputs.length - 1].focus();
@@ -1017,6 +1023,7 @@ const POS = () => {
   const [isMobileEditItemOpen, setIsMobileEditItemOpen] = useState(false);
   const [mobileEditingIndex, setMobileEditingIndex] = useState<number | null>(null);
   const [mobileEditQty, setMobileEditQty] = useState('');
+  const [mobileEditFreeQty, setMobileEditFreeQty] = useState('');
   const [mobileEditRate, setMobileEditRate] = useState('');
   const [mobileEditDiscPct, setMobileEditDiscPct] = useState('');
 
@@ -1061,6 +1068,7 @@ const POS = () => {
       const newItem = {
         productId: isSvc ? 0 : Number(product.id),
         quantity: 1,
+        freeQuantity: 0,
         stock: isSvc ? 999999 : Number(product.currentStock || 0),
         rate: rate > 0 ? rate : 0,
         unit: product.unit?.shortCode || product.unit?.name || 'Nos',
@@ -1086,6 +1094,7 @@ const POS = () => {
           : currentItems.length;
         setMobileEditingIndex(newIndex);
         setMobileEditQty('1');
+        setMobileEditFreeQty('0');
         setMobileEditRate('');
         setMobileEditDiscPct('0');
         setIsMobileEditItemOpen(true);
@@ -1101,7 +1110,7 @@ const POS = () => {
     const curQty = Number(it.quantity) || 0;
     if (curQty <= 1) {
       if (currentItems.length === 1) {
-        setValue('items.0', { productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }, { shouldValidate: true });
+        setValue('items.0', { productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }, { shouldValidate: true });
       } else {
         remove(originalIndex);
       }
@@ -1117,7 +1126,7 @@ const POS = () => {
   const handleMobileDeleteItem = (originalIndex: number) => {
     const currentItems = getValues('items') || [];
     if (currentItems.length === 1) {
-      setValue('items.0', { productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }, { shouldValidate: true });
+      setValue('items.0', { productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, tax: 0, total: 0 }, { shouldValidate: true });
     } else {
       remove(originalIndex);
     }
@@ -1129,6 +1138,7 @@ const POS = () => {
     if (!it) return;
     setMobileEditingIndex(originalIndex);
     setMobileEditQty(String(it.quantity || 1));
+    setMobileEditFreeQty(String(it.freeQuantity || 0));
     setMobileEditRate(String(it.rate || 0));
     setMobileEditDiscPct(String(it.discPercent || 0));
     setIsMobileEditItemOpen(true);
@@ -1137,6 +1147,7 @@ const POS = () => {
   const handleMobileSaveEdit = () => {
     if (mobileEditingIndex === null) return;
     const qty = parseFloat(mobileEditQty) || 1;
+    const freeQty = Math.max(0, parseFloat(mobileEditFreeQty) || 0);
     const rate = parseFloat(mobileEditRate) || 0;
     const discPct = parseFloat(mobileEditDiscPct) || 0;
     const gross = qty * rate;
@@ -1144,6 +1155,7 @@ const POS = () => {
     const total = parseFloat((gross - discAmt).toFixed(2));
 
     setValue(`items.${mobileEditingIndex}.quantity`, qty, { shouldValidate: true });
+    setValue(`items.${mobileEditingIndex}.freeQuantity`, freeQty, { shouldValidate: true });
     setValue(`items.${mobileEditingIndex}.rate`, rate, { shouldValidate: true });
     setValue(`items.${mobileEditingIndex}.discPercent`, discPct, { shouldValidate: true });
     setValue(`items.${mobileEditingIndex}.discAmt`, discAmt, { shouldValidate: true });
@@ -1182,6 +1194,7 @@ const POS = () => {
   );
 
   const mobileCartTotalQty = validMobileCartItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0);
+  const mobileCartTotalFreeQty = validMobileCartItems.reduce((s: number, it: any) => s + (Number(it.freeQuantity) || 0), 0);
 
   return (
     <div className="absolute inset-0 bg-[#F3F4F6] flex flex-col font-sans overflow-hidden z-10 print:static print:block print:overflow-visible print:h-auto print:bg-white">
@@ -1458,7 +1471,7 @@ const POS = () => {
           <button
             type="button"
             onClick={() => {
-              append({ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
+              append({ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
               setTimeout(() => {
                 const inputs = document.querySelectorAll<HTMLElement>('[data-row-product] input');
                 if (inputs.length > 0) inputs[inputs.length - 1].focus();
@@ -1520,6 +1533,7 @@ const POS = () => {
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-20">Unit</th>
 
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-24">Qty</th>
+                <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-28" title="Free Quantity (Buy 1 Get 1)">Free Qty</th>
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-28">Rate</th>
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-20">Disc %</th>
                 <th className="px-2 py-2 text-center text-[12px] font-bold border border-[#334155] w-24">Disc Amt</th>
@@ -1535,7 +1549,7 @@ const POS = () => {
             </thead>
             <tbody>
               {fields.map((field, index) => {
-                const totalCols = 4; // qty=1, rate=2, discPercent=3, discAmt=4
+                const totalCols = 5; // qty=1, freeQuantity=2, rate=3, discPercent=4, discAmt=5
                 return (
                   <tr key={field.id} className="border-b border-[#E5E7EB] hover:bg-[#F9FAFB]">
                     <td data-label="#" className="px-2 py-1 text-center text-[13px] border-r border-[#E5E7EB]">{index + 1}</td>
@@ -1559,7 +1573,7 @@ const POS = () => {
                             handleProductChange(index, String(val));
                             if (Number(val) === 0) {
                               if (index === fields.length - 1) {
-                                append({ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
+                                append({ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 });
                                 setTimeout(() => {
                                   const inputs = document.querySelectorAll<HTMLElement>('[data-row-product] input');
                                   if (inputs.length > 0) inputs[inputs.length - 1].focus();
@@ -1603,19 +1617,51 @@ const POS = () => {
                         className="w-full px-2 py-1 border border-[#D1D5DB] focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 rounded text-[13px] outline-none text-center transition-colors"
                       />
                     </td>
+                    <td data-label="Free Qty" className="px-2 py-1 border-r border-[#E5E7EB]">
+                      <div className="flex items-center gap-1">
+                        <input
+                          {...register(`items.${index}.freeQuantity`)}
+                          data-row={index} data-col={2}
+                          type="number" min="0" step="any" placeholder="0"
+                          disabled={!!watch(`items.${index}.isService`)}
+                          onFocus={(e) => e.target.select()}
+                          onKeyDown={(e) => handleCellKey(e, index, 2, totalCols)}
+                          className={`w-full px-2 py-1 border rounded text-[13px] outline-none text-center transition-colors disabled:bg-gray-100 disabled:text-gray-400 ${Number(watch(`items.${index}.freeQuantity`)) > 0 ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-bold' : 'border-[#D1D5DB] focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50'}`}
+                        />
+                        {!watch(`items.${index}.isService`) && Number(watch(`items.${index}.productId`)) > 0 && (
+                          <button
+                            type="button"
+                            tabIndex={-1}
+                            onClick={() => {
+                              const qVal = Number(watch(`items.${index}.quantity`)) || 1;
+                              if (!(Number(watch(`items.${index}.quantity`)) > 0)) {
+                                setValue(`items.${index}.quantity`, qVal);
+                              }
+                              const curFree = Number(watch(`items.${index}.freeQuantity`)) || 0;
+                              setValue(`items.${index}.freeQuantity`, curFree === qVal ? 0 : qVal);
+                            }}
+                            className={`px-1.5 py-1 rounded text-[10px] font-extrabold border shrink-0 transition-colors ${Number(watch(`items.${index}.freeQuantity`)) > 0 ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'}`}
+                            title="Buy 1 Get 1 (match Free Qty to Qty)"
+                          >
+                            1+1
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td data-label="Rate" className="px-2 py-1 border-r border-[#E5E7EB]">
                       <div className="flex items-center gap-1">
                         <input
                           {...register(`items.${index}.rate`)}
-                          data-row={index} data-col={2}
+                          data-row={index} data-col={3}
                           type="number" step="0.01" placeholder="0.00"
                           onFocus={(e) => e.target.select()}
-                          onKeyDown={(e) => handleCellKey(e, index, 2, totalCols)}
+                          onKeyDown={(e) => handleCellKey(e, index, 3, totalCols)}
                           className="w-full px-2 py-1 border border-[#CBD5E1] bg-white focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] focus:bg-blue-50 text-black rounded text-[13px] outline-none text-right font-bold transition-colors"
                         />
                         {(settings?.enableCustomerWiseRate || (settings as any)?.enableCustomerRates) && !!selectedCustomerId && Number(watch(`items.${index}.productId`)) > 0 && Number(watch(`items.${index}.rate`)) > 0 && (
                           <button
                             type="button"
+                            tabIndex={-1}
                             onClick={() => {
                               const pId = Number(watch(`items.${index}.productId`));
                               const rVal = Number(watch(`items.${index}.rate`));
@@ -1632,10 +1678,10 @@ const POS = () => {
                     <td data-label="Disc %" className="px-2 py-1 border-r border-[#E5E7EB]">
                       <input
                         {...register(`items.${index}.discPercent`)}
-                        data-row={index} data-col={3}
+                        data-row={index} data-col={4}
                         type="number" step="0.01" placeholder="0"
                         onFocus={(e) => e.target.select()}
-                        onKeyDown={(e) => handleCellKey(e, index, 3, totalCols)}
+                        onKeyDown={(e) => handleCellKey(e, index, 4, totalCols)}
                         onChange={(e) => {
                           register(`items.${index}.discPercent`).onChange(e);
                           const pct = Number(e.target.value) || 0;
@@ -1650,10 +1696,10 @@ const POS = () => {
                     <td data-label="Disc Amt" className="px-2 py-1 border-r border-[#E5E7EB]">
                       <input
                         {...register(`items.${index}.discAmt`)}
-                        data-row={index} data-col={4}
+                        data-row={index} data-col={5}
                         type="number" step="0.01" placeholder="0.00"
                         onFocus={(e) => e.target.select()}
-                        onKeyDown={(e) => handleCellKey(e, index, 4, totalCols)}
+                        onKeyDown={(e) => handleCellKey(e, index, 5, totalCols)}
                         onChange={(e) => {
                           register(`items.${index}.discAmt`).onChange(e);
                           const amt = Number(e.target.value) || 0;
@@ -1693,7 +1739,7 @@ const POS = () => {
                       <div className="flex justify-center gap-2">
                         <button
                           type="button"
-                          onClick={() => append({ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 })}
+                          onClick={() => append({ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 })}
                           className="bg-[#10B981] text-white p-1.5 rounded hover:bg-[#059669] transition-colors shadow-sm"
                           title="Add Row"
                         >
@@ -1725,7 +1771,14 @@ const POS = () => {
               <div className="entry-footer-totals flex flex-col md:flex-row items-stretch md:items-center md:justify-start gap-4 md:gap-6">
 
                 <div className="w-full md:w-56 flex flex-col gap-1">
-                  <label className="text-[13px] font-extrabold text-[#1F2937] uppercase">Total Quantity:</label>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-[13px] font-extrabold text-[#1F2937] uppercase">Total Quantity:</label>
+                    {watch('items').reduce((acc: number, item: any) => acc + (Number(item.freeQuantity) || 0), 0) > 0 && (
+                      <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                        +{watch('items').reduce((acc: number, item: any) => acc + (Number(item.freeQuantity) || 0), 0)} Free
+                      </span>
+                    )}
+                  </div>
                   <input
                     value={watch('items').reduce((acc: number, item: any) => acc + (Number(item.quantity) || 0), 0)}
                     readOnly
@@ -1842,7 +1895,7 @@ const POS = () => {
             <div className="flex flex-nowrap justify-between sm:justify-center gap-1 sm:gap-2 w-full md:w-auto">
               <button
                 type="button"
-                onClick={() => append({ productId: 0, quantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 })}
+                onClick={() => append({ productId: 0, quantity: '' as any, freeQuantity: '' as any, stock: 0, rate: '' as any, unit: 'Nos', discPercent: '' as any, discAmt: '' as any, total: 0 })}
                 className="bg-[#2563EB] text-white text-[10px] sm:text-[11px] font-bold px-2 sm:px-3 py-1.5 rounded-sm flex items-center gap-1 cursor-pointer hover:bg-[#1D4ED8] whitespace-nowrap"
               >
                 <span className="opacity-70 border-r border-[#60A5FA] pr-1 mr-1">F2</span> Add Row
@@ -2355,6 +2408,9 @@ const POS = () => {
                               <p className="text-sm font-bold text-slate-800 line-clamp-1">{itemName}</p>
                               <p className="text-xs text-slate-500 mt-0.5">
                                 {itemCode && `${itemCode} · `}Rate: {formatCurrency(item.rate)}
+                                {Number(item.freeQuantity) > 0 && (
+                                  <span className="ml-1.5 text-emerald-700 font-bold">· +{item.freeQuantity} Free</span>
+                                )}
                                 {discPercent > 0 && ` · Disc: ${discPercent}%`}
                               </p>
                             </div>
@@ -2470,7 +2526,12 @@ const POS = () => {
                 <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
                   <div className="flex justify-between text-xs text-slate-500 font-semibold">
                     <span>Total Items:</span>
-                    <span className="text-slate-800 font-bold">{mobileCartTotalQty}</span>
+                    <span className="text-slate-800 font-bold">
+                      {mobileCartTotalQty}
+                      {mobileCartTotalFreeQty > 0 && (
+                        <span className="ml-1 text-emerald-700">(+{mobileCartTotalFreeQty} Free)</span>
+                      )}
+                    </span>
                   </div>
                   <div className="flex justify-between text-xs text-slate-500 font-semibold">
                     <span>Gross Amount:</span>
@@ -2630,15 +2691,36 @@ const POS = () => {
                 </button>
               </div>
               <div className="p-4 space-y-3.5">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Quantity</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={mobileEditQty}
-                    onChange={(e) => setMobileEditQty(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-base font-bold text-slate-800 outline-none focus:border-blue-500 text-right"
-                  />
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Quantity</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={mobileEditQty}
+                      onChange={(e) => setMobileEditQty(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-base font-bold text-slate-800 outline-none focus:border-blue-500 text-right"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-bold text-emerald-700 uppercase">Free Qty</label>
+                      <button
+                        type="button"
+                        onClick={() => setMobileEditFreeQty(mobileEditFreeQty === (mobileEditQty || '1') ? '0' : (mobileEditQty || '1'))}
+                        className="text-[10px] font-extrabold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded"
+                      >
+                        1+1
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      value={mobileEditFreeQty}
+                      onChange={(e) => setMobileEditFreeQty(e.target.value)}
+                      className="w-full px-3 py-2 border border-emerald-300 bg-emerald-50/40 rounded-xl text-base font-bold text-emerald-800 outline-none focus:border-emerald-500 text-right"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Rate ({settings?.currencySymbol || '₹'})</label>

@@ -22,6 +22,10 @@ class SaleItemDto {
   quantity: number;
 
   @IsNumber()
+  @IsOptional()
+  freeQuantity?: number;
+
+  @IsNumber()
   rate: number;
 
   @IsNumber()

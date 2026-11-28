@@ -228,7 +228,12 @@ export default function ViewSalesModal({ saleId, onClose }: Props) {
                           <p className="font-black text-gray-900 text-sm shrink-0">{formatCurrency(item.amount)}</p>
                         </div>
                         <div className="flex items-center justify-between text-xs text-gray-600 mt-2 pt-2 border-t border-slate-200/50">
-                          <span>Qty: <strong className="text-gray-800">{item.quantity} {item.isService ? 'Svc' : (item.product?.unit?.shortCode || item.product?.unit?.name || 'Nos')}</strong></span>
+                          <span>
+                            Qty: <strong className="text-gray-800">{item.quantity} {item.isService ? 'Svc' : (item.product?.unit?.shortCode || item.product?.unit?.name || 'Nos')}</strong>
+                            {Number(item.freeQuantity) > 0 && (
+                              <span className="ml-1.5 text-[10px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">+{Number(item.freeQuantity)} Free</span>
+                            )}
+                          </span>
                           <span>Rate: <strong className="text-gray-800">{formatCurrency(item.rate)}</strong></span>
                           {Number(item.discount) > 0 && <span className="text-red-500 font-bold">Disc: -{formatCurrency(item.discount)}</span>}
                         </div>
@@ -263,7 +268,12 @@ export default function ViewSalesModal({ saleId, onClose }: Props) {
                             <span className="font-bold text-gray-800">{displayName}</span>
                             {!item.isService && item.product?.hsnCode && <span className="block text-[11px] text-gray-400">HSN: {item.product.hsnCode}</span>}
                           </td>
-                          <td className="py-3 px-2 text-right">{item.quantity}</td>
+                          <td className="py-3 px-2 text-right">
+                            {item.quantity}
+                            {Number(item.freeQuantity) > 0 && (
+                              <span className="ml-1.5 text-[10px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">+{Number(item.freeQuantity)} Free</span>
+                            )}
+                          </td>
                           <td className="py-3 px-2 text-center text-gray-500">{item.isService ? 'Svc' : (item.product?.unit?.name || 'Nos')}</td>
                           <td className="py-3 px-2 text-right font-medium">{formatCurrency(item.rate)}</td>
                           <td className="py-3 px-2 text-right text-red-500">{item.discount > 0 ? formatCurrency(item.discount) : '-'}</td>

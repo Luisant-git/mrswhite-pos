@@ -232,7 +232,12 @@ const SalesView = () => {
                         <span className="font-bold text-gray-800">{item.product?.name}</span>
                         {item.product?.hsnCode && <span className="block text-[11px] text-gray-400">HSN: {item.product.hsnCode}</span>}
                       </td>
-                      <td className="py-3 px-2 text-right">{item.quantity}</td>
+                      <td className="py-3 px-2 text-right">
+                        {item.quantity}
+                        {Number(item.freeQuantity) > 0 && (
+                          <span className="ml-1.5 text-[10px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">+{Number(item.freeQuantity)} Free</span>
+                        )}
+                      </td>
                       <td className="py-3 px-2 text-center text-gray-500">{item.product?.unit?.name || 'Nos'}</td>
                       <td className="py-3 px-2 text-right font-medium">{formatCurrency(item.rate)}</td>
                       <td className="py-3 px-2 text-right text-red-500">{item.discount > 0 ? formatCurrency(item.discount) : '-'}</td>

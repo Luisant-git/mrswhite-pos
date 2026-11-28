@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Printer, Loader2, QrCode, Download, X } from 'lucide-react';
+import { Printer, Loader2, QrCode, Download, Share2, X } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { dataUrlToBlob, sanitizeFileNamePart, shareOrDownloadFile } from '../utils/shareFile';
 
@@ -275,6 +275,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
   const showMrpColumn = !isEstimation && items.some((it: any) => !it.isService);
 
   const totalQty = items.reduce((sum: number, it: any) => sum + (Number(it.quantity) || 0), 0);
+  const totalFreeQty = items.reduce((sum: number, it: any) => sum + (Number(it.freeQuantity) || 0), 0);
   const itemsAmountSum = items.reduce((sum: number, it: any) => sum + Number(it.amount || it.total || 0), 0);
   const amountIsPreTax = Math.abs(subtotalVal - itemsAmountSum) < 0.05 && totalTaxVal > 0;
 
@@ -477,12 +478,14 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
         const formattedGstRate = `${Math.round(gstRate * 100) / 100}%`;
         const mrpVal = Number(!item.isService ? item.product?.mrp : 0) || 0;
 
+        const freeQty = Number(item.freeQuantity || 0);
+        const unitLabel = item.isService ? 'Svc' : (item.product?.unit?.shortCode || 'Nos');
         doc.setFontSize(8); doc.setTextColor('#1e293b');
         doc.setFont('helvetica', 'normal'); doc.text(String(idx + 1), col + 4, y, { align: 'center' });
         doc.setFont('helvetica', 'bold'); doc.text(splitName, col + 10, y);
         doc.setFont('helvetica', 'normal');
         doc.text(!item.isService && item.product?.hsnCode ? String(item.product.hsnCode) : '-', col + 66, y, { align: 'center' });
-        doc.text(`${Number(item.quantity || 0)} ${item.isService ? 'Svc' : (item.product?.unit?.shortCode || 'Nos')}`, col + 84, y, { align: 'center' });
+        doc.text(`${Number(item.quantity || 0)}${freeQty > 0 ? `+${freeQty}F` : ''} ${unitLabel}`, col + 84, y, { align: 'center' });
         doc.text(exclRate.toFixed(2), col + 106, y, { align: 'right' });
         if (showTaxColumns) {
           doc.text(formattedGstRate, col + 120, y, { align: 'center' });
@@ -501,7 +504,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       doc.line(col, y + 3.5, W - margin, y + 3.5);
       doc.setFontSize(8.5); doc.setFont('helvetica', 'bold'); doc.setTextColor('#000000');
       doc.text('Total', col + 10, y + 1);
-      doc.text(Number(totalQty).toFixed(2), col + 84, y + 1, { align: 'center' });
+      doc.text(`${Number(totalQty).toFixed(2)}${totalFreeQty > 0 ? ` (+${totalFreeQty}F)` : ''}`, col + 84, y + 1, { align: 'center' });
       if (showTaxColumns) doc.text(totalItemsTax.toFixed(2), col + 145, y + 1, { align: 'right' });
       doc.text(`${pdfCurr} ${totalItemsLineAmount.toFixed(2)}`, W - margin - 2, y + 1, { align: 'right' });
       y += 9;
@@ -695,7 +698,7 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
       doc.setFont('helvetica', 'normal'); doc.setTextColor('#94a3b8');
       doc.text(`This is a computer generated invoice | Thank you for partnering with ${settings?.shopName || 'POS Suite 360'}!`, W / 2, 288, { align: 'center' });
 
-      const pdfBlob = doc.output('blob');
+      const pdfBlob = new Blob([doc.output('blob')], { type: 'application/pdf' });
       const safeDocNo = sanitizeFileNamePart(invoiceNo, 'document');
       const docPrefix = isEstimation ? 'Estimation' : 'Invoice';
       await shareOrDownloadFile({
@@ -1022,7 +1025,9 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
             return (
               <tr key={idx}>
                 <td className="py-0.5 pr-1 max-w-[28mm] break-words">{item.isService ? (item.itemName || item.serviceItem?.name || '') : (item.product?.name || '')}</td>
-                <td className="py-0.5 text-center whitespace-nowrap">{item.quantity} {item.isService ? 'Svc' : (item.product?.unit?.shortCode || '')}</td>
+                <td className="py-0.5 text-center whitespace-nowrap">
+                  {item.quantity}{Number(item.freeQuantity) > 0 ? `+${Number(item.freeQuantity)}F` : ''} {item.isService ? 'Svc' : (item.product?.unit?.shortCode || '')}
+                </td>
                 <td className="py-0.5 text-right whitespace-nowrap">{exclRate.toFixed(2)}</td>
                 <td className="py-0.5 text-right whitespace-nowrap font-bold">{lineTotal.toFixed(2)}</td>
               </tr>
@@ -1173,6 +1178,11 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
                   <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-600`}>{!item.isService ? (item.product?.hsnCode || '-') : '-'}</td>
                   <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-center text-slate-700 font-medium whitespace-nowrap`}>
                     {Number(item.quantity || 0)} {item.isService ? 'Svc' : (item.product?.unit?.shortCode || 'Nos')}
+                    {Number(item.freeQuantity) > 0 && (
+                      <span className="ml-1 text-[8px] sm:text-[9px] font-bold text-emerald-700">
+                        (+{Number(item.freeQuantity)} Free)
+                      </span>
+                    )}
                   </td>
                   <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-0.5 print:px-1' : 'print:py-1 print:px-1.5'} text-right text-slate-700 whitespace-nowrap`}>{exclRate.toFixed(2)}</td>
                   {showTaxColumns && (
@@ -1198,7 +1208,12 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
               <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-center`}></td>
               <td className={`py-1.5 px-1.5 sm:py-2 sm:px-2.5 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-2'} uppercase tracking-wide`}>Total</td>
               <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>
-              <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-center whitespace-nowrap`}>{Number(totalQty).toFixed(2)}</td>
+              <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-center whitespace-nowrap`}>
+                {Number(totalQty).toFixed(2)}
+                {totalFreeQty > 0 && (
+                  <span className="ml-1 text-[8px] sm:text-[9px] text-emerald-700">(+{totalFreeQty} Free)</span>
+                )}
+              </td>
               <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>
               {showTaxColumns && <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'}`}></td>}
               {showTaxColumns && <td className={`py-1.5 px-1 sm:py-2 sm:px-2 ${isA5 ? 'print:py-1 print:px-1' : 'print:py-1.5 print:px-1.5'} text-right whitespace-nowrap`}>{totalItemsTax.toFixed(2)}</td>}
@@ -1439,14 +1454,25 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
               <Printer size={16} className="text-blue-400 shrink-0" />
               <span className="truncate">Print {isEstimation ? 'Estimation' : 'Invoice'} - {invoiceNo}</span>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
-              title="Close"
-            >
-              <X size={18} />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleWhatsApp}
+                disabled={isSharing}
+                className="bg-[#25D366] hover:bg-[#1EBE55] disabled:opacity-70 text-white px-2.5 sm:px-3 py-1 rounded flex items-center gap-1.5 text-[11px] sm:text-[12px] font-bold transition-colors"
+              >
+                {isSharing ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}
+                <span>{isSharing ? 'Sharing...' : 'Share Invoice'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
           </div>
         )}
 
@@ -1559,9 +1585,9 @@ const InvoicePrintModal = ({ isOpen, onClose, sale: initialSale, hiddenRenderer 
                 className="bg-[#25D366] hover:bg-[#128C7E] disabled:opacity-70 text-white px-2.5 sm:px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 font-bold text-[11px] sm:text-[12px] transition-colors shadow-sm flex-1 sm:flex-initial"
               >
                 {isSharing ? (
-                  <><Loader2 size={14} className="animate-spin" /> Preparing...</>
+                  <><Loader2 size={14} className="animate-spin" /> Sharing...</>
                 ) : (
-                  <><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><line x1="8.59" y1="13.51" x2="15.42" y2="17.49" /><line x1="15.41" y1="6.51" x2="8.59" y2="10.49" /></svg> <span>Share Invoice</span></>
+                  <><Share2 size={14} /> <span>Share Invoice</span></>
                 )}
               </button>
               {showPaymentInfo && activeUpiId && grandTotal > 0 && (

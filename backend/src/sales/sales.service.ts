@@ -70,6 +70,7 @@ export class SalesService {
               isService: item.isService || false,
               itemName: item.itemName || null,
               quantity: item.quantity,
+              freeQuantity: item.freeQuantity || 0,
               rate: item.rate,
               discount: item.discount || 0,
               tax: item.tax || 0,
@@ -80,7 +81,7 @@ export class SalesService {
         include: { items: true },
       });
 
-      // 3. Update stock and ledger for each item
+      // 3. Update stock and ledger for each item (billed qty + free qty both reduce stock)
       for (const item of createSaleDto.items) {
         if (item.isService) {
           // Skip stock updates for service items
@@ -96,11 +97,13 @@ export class SalesService {
           throw new BadRequestException(`Product not found: ${item.productId}`);
         }
 
+        const totalQtyOut = (Number(item.quantity) || 0) + (Number(item.freeQuantity) || 0);
+
         // Decrement current stock (allow negative stock to let checkout proceed; rates stay in Product Master only)
         const updatedProduct = await tx.product.update({
           where: { id: item.productId },
           data: {
-            currentStock: { decrement: item.quantity },
+            currentStock: { decrement: totalQtyOut },
           },
         });
 
@@ -111,7 +114,7 @@ export class SalesService {
             productId: item.productId,
             type: TransactionType.SALE,
             quantityIn: 0,
-            quantityOut: item.quantity,
+            quantityOut: totalQtyOut,
             balance: updatedProduct.currentStock,
             reference: sale.invoiceNo,
           },
@@ -196,13 +199,15 @@ export class SalesService {
       // 2. Enforce "Enable Invoice Editing" and edit window from Settings
       await assertEditableBySettings(tx, existing.date, 'Invoices');
 
-      // 4. Reverse previous stock and ledger entries
+      // 4. Reverse previous stock and ledger entries (billed qty + free qty)
       for (const item of existing.items) {
         if (item.isService || !item.productId) continue;
 
+        const prevQtyOut = (Number(item.quantity) || 0) + (Number(item.freeQuantity) || 0);
+
         const updatedProduct = await tx.product.update({
           where: { id: item.productId },
-          data: { currentStock: { increment: item.quantity } },
+          data: { currentStock: { increment: prevQtyOut } },
         });
 
         await tx.stockTransaction.create({
@@ -210,7 +215,7 @@ export class SalesService {
             date: new Date(),
             productId: item.productId,
             type: TransactionType.SALE_RETURN,
-            quantityIn: item.quantity,
+            quantityIn: prevQtyOut,
             quantityOut: 0,
             balance: updatedProduct.currentStock,
             reference: `Reverted during edit ${existing.invoiceNo}`,
@@ -260,6 +265,7 @@ export class SalesService {
               isService: item.isService || false,
               itemName: item.itemName || null,
               quantity: item.quantity,
+              freeQuantity: item.freeQuantity || 0,
               rate: item.rate,
               discount: item.discount || 0,
               tax: item.tax || 0,
@@ -270,16 +276,18 @@ export class SalesService {
         include: { items: true },
       });
 
-      // 8. Apply new stock deductions and ledger entries
+      // 8. Apply new stock deductions and ledger entries (billed qty + free qty)
       for (const item of updateSaleDto.items) {
         if (item.isService || !item.productId) continue;
 
         const currentProduct = await tx.product.findUnique({ where: { id: item.productId } });
         if (!currentProduct) throw new BadRequestException(`Product not found: ${item.productId}`);
 
+        const totalQtyOut = (Number(item.quantity) || 0) + (Number(item.freeQuantity) || 0);
+
         const updatedProduct = await tx.product.update({
           where: { id: item.productId },
-          data: { currentStock: { decrement: item.quantity } },
+          data: { currentStock: { decrement: totalQtyOut } },
         });
 
         await tx.stockTransaction.create({
@@ -288,7 +296,7 @@ export class SalesService {
             productId: item.productId,
             type: TransactionType.SALE,
             quantityIn: 0,
-            quantityOut: item.quantity,
+            quantityOut: totalQtyOut,
             balance: updatedProduct.currentStock,
             reference: existing.invoiceNo,
           },
@@ -331,14 +339,16 @@ export class SalesService {
         throw new BadRequestException('Sale not found');
       }
 
-      // 1. Reverse stock and ledger
+      // 1. Reverse stock and ledger (billed qty + free qty)
       for (const item of sale.items) {
         if (item.isService || !item.productId) continue;
+
+        const prevQtyOut = (Number(item.quantity) || 0) + (Number(item.freeQuantity) || 0);
 
         const updatedProduct = await tx.product.update({
           where: { id: item.productId },
           data: {
-            currentStock: { increment: item.quantity },
+            currentStock: { increment: prevQtyOut },
           },
         });
 
@@ -348,7 +358,7 @@ export class SalesService {
             date: new Date(),
             productId: item.productId,
             type: TransactionType.SALE_RETURN,
-            quantityIn: item.quantity,
+            quantityIn: prevQtyOut,
             quantityOut: 0,
             balance: updatedProduct.currentStock,
             reference: `Reverted ${sale.invoiceNo}`,
