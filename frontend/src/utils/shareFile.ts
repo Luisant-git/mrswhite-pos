@@ -47,29 +47,29 @@ export const shareOrDownloadFile = async ({
   fileName,
   title,
 }: ShareOrDownloadOptions): Promise<'shared' | 'downloaded' | 'aborted'> => {
-  const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
+  const mimeType =
+    blob.type ||
+    (fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream');
+  const file = new File([blob], fileName, { type: mimeType });
 
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
-    const canShareFiles =
-      typeof navigator.canShare === 'function' ? navigator.canShare({ files: [file] }) : false;
-
-    if (canShareFiles) {
-      try {
-        await navigator.share({
-          files: [file],
-          title,
-        });
-        return 'shared';
-      } catch (err: any) {
-        if (err?.name === 'AbortError') {
-          return 'aborted';
-        }
-        console.warn('Native share unavailable or failed, downloading instead:', err);
-        downloadBlobFile(blob, fileName);
-        const reason = err?.name ? `${err.name}${err?.message ? `: ${String(err.message).slice(0, 60)}` : ''}` : 'native share unavailable';
-        toast.success(`${fileName} downloaded (${reason})`);
-        return 'downloaded';
+    try {
+      await navigator.share({
+        files: [file],
+        title,
+      });
+      return 'shared';
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return 'aborted';
       }
+      console.warn('Native share unavailable or failed, downloading instead:', err);
+      downloadBlobFile(blob, fileName);
+      const reason = err?.name
+        ? `${err.name}${err?.message ? `: ${String(err.message).slice(0, 60)}` : ''}`
+        : 'native share unavailable';
+      toast.success(`${fileName} downloaded (${reason})`);
+      return 'downloaded';
     }
   }
 
